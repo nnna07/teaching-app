@@ -532,7 +532,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.12.0';
+const APP_VERSION = 'v3.12.1';
 const APP_VERSION_DATE = '2026-08-01';
 
 const $ = s => document.querySelector(s);
@@ -797,6 +797,11 @@ function scheduleFreeSync(){
   freeSyncTimer = setTimeout(()=>doFreeSync(false), 2000);
 }
 
+function isSyncNetworkError(e){
+  const msg = (e && e.message) || '';
+  return msg.includes('Load failed') || msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('network') || msg.includes('timeout') || msg.includes('abort');
+}
+
 async function doFreeSync(showToast=false){
   if(!DB.config.freeSyncBlobId || freeSyncing) return;
   freeSyncing = true;
@@ -827,7 +832,13 @@ async function doFreeSync(showToast=false){
     if(!putResp.ok && putResp.status!==404) throw new Error('HTTP '+putResp.status);
     if(showToast) toast('✅ 同步成功');
   }catch(e){
-    if(showToast) toast('同步失败: '+e.message);
+    if(showToast){
+      if(isSyncNetworkError(e)){
+        toast('❌ 同步失败：网络受限。建议改用 Cloudflare Worker 方式，更稳定');
+      } else {
+        toast('同步失败: '+e.message);
+      }
+    }
   }finally{
     freeSyncing = false;
     setSyncInd(false);
@@ -868,6 +879,9 @@ async function enableFreeSync(){
     return blobId;
   }catch(e){
     setSyncInd(false);
+    if(isSyncNetworkError(e)){
+      throw new Error('网络受限，jsonblob.com 在当前网络下无法访问。建议改用 Cloudflare Worker 方式');
+    }
     throw e;
   }
 }
@@ -898,6 +912,9 @@ async function joinFreeSync(blobId){
     return true;
   }catch(e){
     setSyncInd(false);
+    if(isSyncNetworkError(e)){
+      throw new Error('网络受限，无法连接 jsonblob.com。建议改用 Cloudflare Worker 方式');
+    }
     throw e;
   }
 }
@@ -4188,6 +4205,9 @@ function renderMine(){
     <div class="form-row"><label><input type="checkbox" id="cfg-auto" ${cfg.autoSync?'checked':''} style="width:auto;margin-right:6px">自动实时同步(推荐)</label></div>
     ${!freeOn?`<button class="btn btn-primary btn-block" onclick="enableFreeSyncUI()" style="margin-bottom:6px">☁️ 一键开启自动同步</button>`:`<button class="btn btn-ghost btn-block" onclick="doFreeSync(true)" style="margin-bottom:6px">🔄 立即同步</button><button class="btn btn-danger btn-block" onclick="disableFreeSyncUI()" style="margin-bottom:6px">关闭自动同步</button>`}
     ${!freeOn?`<button class="btn btn-ghost btn-block" onclick="joinFreeSyncUI()" style="margin-bottom:6px">📥 输入同步码加入</button>`:''}
+    ${!freeOn?`<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:11px;color:#92400e;line-height:1.6">
+      ⚠️ 国内网络下"一键开启"可能失败（jsonblob.com 受限）。推荐用 Cloudflare Worker 方式，稳定且免费，详见仓库里的 SYNC_WORKER_README.md
+    </div>`:''}
     <div style="border-top:1px solid var(--border);margin:8px 0;padding-top:8px">
       <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px">高级：自建 Cloudflare Worker</div>
       <div class="form-row" style="margin-bottom:4px"><input class="form-control" id="cfg-url" value="${cfg.workerUrl}" placeholder="https://xxx.workers.dev (可选)" style="font-size:11px"></div>
@@ -4198,7 +4218,8 @@ function renderMine(){
       • 同一浏览器多标签页 → 自动同步，零配置<br>
       • 跨设备 → 点"一键开启"获取同步码，另一设备输入即可<br>
       • 数据通过 jsonblob.com 免费中转，无需注册<br>
-      • 每30秒自动同步一次，编辑后2秒自动上传
+      • 每30秒自动同步一次，编辑后2秒自动上传<br>
+      ⚠️ jsonblob.com 在国内部分网络下可能访问失败，若提示"Load failed"，请改用 Cloudflare Worker 方式（更稳定）
     </div>
   `;
   // 老师列表
@@ -4292,7 +4313,7 @@ async function enableFreeSyncUI(){
     toast('✅ 自动同步已开启，同步码: '+(DB.config.freeSyncKey||blobId.slice(-6).toUpperCase()));
     renderMine();
   }catch(e){
-    toast('❌ 开启失败: '+e.message+' (可能是网络限制，请尝试 Worker 方式)');
+    toast('❌ 开启失败: '+e.message);
   }
 }
 
