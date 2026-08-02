@@ -100,6 +100,12 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
 .batch-item{position:relative;display:flex;align-items:flex-start;gap:8px;padding:9px 10px;background:var(--card);border-radius:9px;margin-bottom:5px;border-left:3px solid var(--primary);box-shadow:0 1px 2px rgba(0,0,0,.03)}
 .batch-item .batch-check{flex-shrink:0;margin-top:2px;width:18px;height:18px;accent-color:var(--primary)}
 
+/* 课次分组折叠 */
+.lesson-group .lg-body{transition:all .2s;overflow:hidden}
+.lesson-group.collapsed .lg-body{max-height:0;opacity:0;padding:0;margin:0;overflow:hidden}
+.lesson-group.collapsed .lg-header span:first-child{transform:rotate(-90deg)}
+.lesson-group .lg-header span:first-child{transition:transform .2s;display:inline-block}
+
 /* 时间表 */
 .view-switch{display:flex;background:var(--card);border-radius:10px;padding:3px;margin-bottom:8px}
 .view-switch button{flex:1;padding:7px;font-size:12px;border-radius:8px;color:var(--text2)}
@@ -532,8 +538,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.12.3';
-const APP_VERSION_DATE = '2026-08-01';
+const APP_VERSION = 'v3.13.0';
+const APP_VERSION_DATE = '2026-08-02';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -1017,10 +1023,11 @@ function renderLessons(){
   </div>`;
 
   // 快捷操作栏
-  html+=`<div style="display:flex;gap:6px;margin-bottom:8px">
-    <button class="btn btn-primary btn-sm" style="flex:1" onclick="openLessonEdit()">+ 新建课次</button>
-    <button class="btn btn-ghost btn-sm" style="flex:1" onclick="dedupLessons()">🔍 去重</button>
-    <button class="btn btn-ghost btn-sm" style="flex:1" onclick="switchTab('timetable')">📅 时间表</button>
+  html+=`<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+    <button class="btn btn-primary btn-sm" style="flex:1;min-width:80px" onclick="openLessonEdit()">+ 新建课次</button>
+    <button class="btn btn-ghost btn-sm" onclick="openBatchAdjust()">⏰ 批量调时</button>
+    <button class="btn btn-ghost btn-sm" onclick="dedupLessons()">🔍 去重</button>
+    <button class="btn btn-ghost btn-sm" onclick="switchTab('timetable')">📅 时间表</button>
   </div>`;
 
   // 下一节课高亮卡片
@@ -1071,7 +1078,7 @@ function renderLessons(){
   });
   html+=`</div></div>`;
 
-  html+=`<div style="font-size:12px;font-weight:600;color:var(--text2);margin:14px 0 6px;padding:0 3px;display:flex;justify-content:space-between;align-items:center"><span>全部课次 (${lessons.length})</span><span style="font-size:11px;color:var(--text3);font-weight:400">按时间排序</span></div>`;
+  html+=`<div style="font-size:12px;font-weight:600;color:var(--text2);margin:14px 0 6px;padding:0 3px;display:flex;justify-content:space-between;align-items:center"><span>全部课次 (${lessons.length})</span><button class="btn btn-sm btn-ghost" style="font-size:10px;padding:3px 8px" onclick="toggleAllLessons()">全部展开/折叠</button></div>`;
   lessons.sort((a,b)=>{
     if(a.mode==='week' && b.mode==='week'){
       if(a.weekday==='all' && b.weekday!=='all') return -1;
@@ -1082,11 +1089,52 @@ function renderLessons(){
     if(b.mode==='week') return 1;
     return (a.date||'').localeCompare(b.date||'')||a.hhmm.localeCompare(b.hhmm);
   });
-  html+=lessons.map(l=>{
-    const dateStr = l.mode==='week' ? nextOccurrence(l) : (l.date || today);
-    return lessonListItem(l, dateStr);
-  }).join('');
+
+  // 按日期/星期分组
+  const groups={};
+  lessons.forEach(l=>{
+    let gKey, gLabel;
+    if(l.mode==='week'){
+      gKey='w_'+(l.weekday==='all'?'all':l.weekday);
+      gLabel=l.weekday==='all'?'每天上课':'每周'+dayNames[l.weekday];
+    } else {
+      gKey='d_'+(l.date||today);
+      const d=new Date((l.date||today)+'T00:00:00');
+      gLabel=(l.date||today)+' '+dayNames[dayOfWeek(l.date||today)];
+    }
+    if(!groups[gKey]) groups[gKey]={label:gLabel, items:[]};
+    groups[gKey].items.push(l);
+  });
+
+  // 渲染分组（可折叠）
+  let groupIdx=0;
+  for(const gKey in groups){
+    const g=groups[gKey];
+    const isTodayGroup = gKey==='d_'+today;
+    const todayLessonsInGroup = g.items.filter(l=>isLessonDone(l.id, l.mode==='week'?nextOccurrence(l):(l.date||today))).length;
+    html+=`<div class="lesson-group" data-gkey="${gKey}" style="margin-bottom:6px">
+      <div class="lg-header" onclick="this.parentElement.classList.toggle('collapsed')" style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--card);border-radius:9px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.03);${isTodayGroup?'border-left:3px solid var(--red)':''}">
+        <span style="font-size:11px;color:var(--text3)">▼</span>
+        <span style="font-size:13px;font-weight:600;${isTodayGroup?'color:var(--red)':''}">${g.label}</span>
+        <span style="font-size:10px;color:var(--text3);margin-left:auto;background:var(--bg);padding:2px 8px;border-radius:7px">${g.items.length}节${todayLessonsInGroup>0?' · 已完成'+todayLessonsInGroup:''}</span>
+      </div>
+      <div class="lg-body" style="padding:4px 0 0 8px">
+        ${g.items.map(l=>{
+          const dateStr = l.mode==='week' ? nextOccurrence(l) : (l.date || today);
+          return lessonListItem(l, dateStr);
+        }).join('')}
+      </div>
+    </div>`;
+    groupIdx++;
+  }
   list.innerHTML=html;
+}
+function toggleAllLessons(){
+  const groups=document.querySelectorAll('.lesson-group');
+  // 检查是否大多数已展开
+  const expandedCount=[...groups].filter(g=>!g.classList.contains('collapsed')).length;
+  const collapse=expandedCount>groups.length/2;
+  groups.forEach(g=>g.classList.toggle('collapsed',collapse));
 }
 
 function lessonListItem(l, dateStr){
@@ -2019,6 +2067,109 @@ function getRangeDates(start,end,freq,weeklyDay){
     else if(freq==='weekly' && wd===parseInt(weeklyDay)) dates.push(ds);
   }
   return dates;
+}
+
+/* ==================== 批量调整课次时间 ==================== */
+function openBatchAdjust(){
+  const teachers=Object.values(DB.data.teachers).filter(t=>!t._deleted);
+  const lessons=Object.values(DB.data.lessons).filter(l=>!l._deleted);
+  if(lessons.length===0){ toast('没有可调整的课次'); return; }
+  const html=`
+    <div class="card" style="background:var(--primary-l);border:1px solid var(--primary)30;padding:10px;margin-bottom:12px">
+      <div style="font-size:12px;color:var(--primary);font-weight:600;margin-bottom:4px">💡 批量调整说明</div>
+      <div style="font-size:11px;color:var(--text2);line-height:1.5">将选中的课次开始时间整体推迟或提前。例如所有课次推迟30分钟，原9:00变为9:30。</div>
+    </div>
+    <div class="form-row"><label>调整范围</label>
+      <select class="form-control" id="ba-scope">
+        <option value="all">全部课次 (${lessons.length})</option>
+        ${teachers.map(t=>{const cnt=lessons.filter(l=>l.teacherId===t.id).length;return `<option value="t:${t.id}">${t.name}的课次 (${cnt})</option>`}).join('')}
+      </select>
+    </div>
+    <div class="form-row"><label>调整方式</label>
+      <div class="chip-group" id="ba-mode">
+        <button class="chip active" data-v="delay">⏰ 推迟</button>
+        <button class="chip" data-v="advance">⏪ 提前</button>
+        <button class="chip" data-v="set">📋 设为指定时间</button>
+      </div>
+    </div>
+    <div class="form-row" id="ba-offset-row"><label>调整时间（分钟）</label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${[15,30,45,60,90,120].map(m=>`<button class="chip" onclick="$('#ba-offset').value=${m};document.querySelectorAll('#ba-offset-row .chip').forEach(c=>c.classList.remove('active'));this.classList.add('active')" style="font-size:12px">${m}分钟</button>`).join('')}
+      </div>
+      <input type="number" class="form-control" id="ba-offset" value="30" min="1" max="600" style="margin-top:6px" placeholder="输入分钟数">
+    </div>
+    <div class="form-row hidden" id="ba-set-row"><label>设为时间</label>
+      <input type="time" class="form-control" id="ba-settime" value="09:00">
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">所有选中课次的开始时间统一设为此时间</div>
+    </div>
+    <div class="form-row"><label>预览</label>
+      <div id="ba-preview" style="font-size:11px;color:var(--text2);background:var(--bg);border-radius:8px;padding:8px;max-height:200px;overflow-y:auto">
+      </div>
+    </div>`;
+  const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="doBatchAdjust()">✓ 执行调整</button>`;
+  openModal(html,footer); setSheetTitle('⏰ 批量调整课次时间');
+  $('#ba-mode').addEventListener('click',e=>{
+    if(e.target.classList.contains('chip')){
+      $$('#ba-mode .chip').forEach(c=>c.classList.remove('active'));
+      e.target.classList.add('active');
+      const v=e.target.dataset.v;
+      $('#ba-offset-row').classList.toggle('hidden',v==='set');
+      $('#ba-set-row').classList.toggle('hidden',v!=='set');
+      updateBatchPreview();
+    }
+  });
+  $('#ba-scope').addEventListener('change',updateBatchPreview);
+  $('#ba-offset').addEventListener('input',updateBatchPreview);
+  $('#ba-settime')?.addEventListener('input',updateBatchPreview);
+  updateBatchPreview();
+}
+function updateBatchPreview(){
+  const scope=$('#ba-scope')?.value||'all';
+  const mode=$('#ba-mode .chip.active')?.dataset.v||'delay';
+  const offset=parseInt($('#ba-offset')?.value||'30');
+  const setTime=$('#ba-settime')?.value||'09:00';
+  let lessons=Object.values(DB.data.lessons).filter(l=>!l._deleted);
+  if(scope.startsWith('t:')) lessons=lessons.filter(l=>l.teacherId===scope.slice(2));
+  const lines=lessons.slice(0,10).map(l=>{
+    const [h,m]=l.hhmm.split(':').map(Number);
+    let newH=h,newM=m;
+    if(mode==='delay'){ newM=h*60+m+offset; newH=Math.floor(newM/60)%24; newM=newM%60; }
+    else if(mode==='advance'){ newM=h*60+m-offset; if(newM<0) newM+=1440; newH=Math.floor(newM/60); newM=newM%60; }
+    else if(mode==='set'){ const [sh,sm]=setTime.split(':').map(Number); newH=sh; newM=sm; }
+    const newTime=`${pad2(newH)}:${pad2(newM)}`;
+    const arrow=mode==='delay'?'→':mode==='advance'?'→':'→';
+    return `<div>${l.hhmm} ${arrow} <b style="color:var(--primary)">${newTime}</b> · ${l.title}</div>`;
+  });
+  let html=lines.join('');
+  if(lessons.length>10) html+=`<div style="color:var(--text3);margin-top:4px">... 共 ${lessons.length} 个课次</div>`;
+  if(lessons.length===0) html='<div style="color:var(--text3)">没有匹配的课次</div>';
+  $('#ba-preview').innerHTML=html;
+}
+function doBatchAdjust(){
+  const scope=$('#ba-scope').value;
+  const mode=$('#ba-mode .chip.active').dataset.v;
+  const offset=parseInt($('#ba-offset')?.value||'30');
+  const setTime=$('#ba-settime')?.value||'09:00';
+  let lessons=Object.values(DB.data.lessons).filter(l=>!l._deleted);
+  if(scope.startsWith('t:')) lessons=lessons.filter(l=>l.teacherId===scope.slice(2));
+  if(lessons.length===0){ toast('没有匹配的课次'); return; }
+  const t=now();
+  let count=0;
+  lessons.forEach(l=>{
+    const [h,m]=l.hhmm.split(':').map(Number);
+    let newH,newM;
+    if(mode==='delay'){ let tot=h*60+m+offset; newH=Math.floor(tot/60)%24; newM=tot%60; }
+    else if(mode==='advance'){ let tot=h*60+m-offset; if(tot<0)tot+=1440; newH=Math.floor(tot/60); newM=tot%60; }
+    else{ const [sh,sm]=setTime.split(':').map(Number); newH=sh; newM=sm; }
+    l.hhmm=`${pad2(newH)}:${pad2(newM)}`;
+    l.updatedAt=t;
+    count++;
+    syncLessonSessions(l.id);
+  });
+  DB.save();
+  closeModal();
+  renderLessons();
+  toast(`✓ 已调整 ${count} 个课次的时间`);
 }
 
 function syncLessonSessions(lessonId){
