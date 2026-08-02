@@ -538,7 +538,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.13.0';
+const APP_VERSION = 'v3.13.1';
 const APP_VERSION_DATE = '2026-08-02';
 
 const $ = s => document.querySelector(s);
@@ -675,10 +675,19 @@ const DB = {
       teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, settings:{} };
   },
   merge(incoming){
+    // 兼容处理：如果 incoming 被嵌套包裹在 data 字段中，递归解包
+    let data = incoming;
+    let depth=0;
+    while(data && typeof data==='object' && !Array.isArray(data) && data.data && typeof data.data==='object' && !Array.isArray(data.data)){
+      const keys=Object.keys(data);
+      if(keys.length<=2 && keys.includes('data')){ data=data.data; depth++; if(depth>100) break; }
+      else break;
+    }
+    incoming = data;
     let changes=0;
-    for(const table of ['teachers','students','lessons','sessions','supervisions']){
-      for(const id in incoming[table]||{}){
-        const inc=incoming[table][id], loc=this.data[table][id];
+    for(const table of ['teachers','students','lessons','sessions','supervisions','settings']){
+      for(const id in (incoming[table]||{})){
+        const inc=incoming[table][id], loc=this.data[table]?this.data[table][id]:null;
         if(!loc || (inc.updatedAt||0)>(loc.updatedAt||0)){
           if(inc._deleted){ delete this.data[table][id]; }
           else{ this.data[table][id]=inc; }
@@ -707,10 +716,22 @@ function currentTeacher(){ return DB.data.teachers[DB.data.currentTeacherId]; }
 /* ==================== 云端同步 ==================== */
 let syncTimer = null;
 let syncing = false;
+let lastSyncResult = null; // 记录最近一次同步结果，用于诊断
 
 function scheduleCloudSync(){
   if(syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(()=>doCloudSync(false), 1500);
+}
+
+// 递归解包嵌套的 {data:...} 层
+function unwrapSyncData(obj){
+  let depth=0;
+  while(obj && typeof obj==='object' && !Array.isArray(obj) && obj.data && typeof obj.data==='object' && !Array.isArray(obj.data)){
+    const keys=Object.keys(obj);
+    if(keys.length<=2 && keys.includes('data')){ obj=obj.data; depth++; if(depth>100) break; }
+    else break;
+  }
+  return obj;
 }
 
 async function doCloudSync(showToast=false){
@@ -718,10 +739,11 @@ async function doCloudSync(showToast=false){
   syncing = true;
   setSyncInd(true);
   try{
+    const exportData = DB.export();
     const resp = await fetch(DB.config.workerUrl+'/sync', {
       method:'POST',
       headers:{'Content-Type':'application/json','X-Client-Id':DB.config.clientId},
-      body: JSON.stringify({ local: DB.export(), clientId: DB.config.clientId, lastVersion: DB.config.lastSyncVersion })
+      body: JSON.stringify({ local: exportData, clientId: DB.config.clientId, lastVersion: DB.config.lastSyncVersion })
     });
     if(!resp.ok){
       let errMsg = 'HTTP '+resp.status;
@@ -729,18 +751,38 @@ async function doCloudSync(showToast=false){
       throw new Error(errMsg);
     }
     const result = await resp.json();
-    if(result.data){
-      DB.merge(result.data);
+
+    // 关键修复：解包可能嵌套的 data 层
+    let syncData = result.data;
+    if(syncData){
+      syncData = unwrapSyncData(syncData);
+      DB.merge(syncData);
       DB.config.lastSyncVersion = result.version;
       DB.saveConfig();
       refreshCurrentView();
     }
-    if(showToast) toast(result.mergedChanges>0?`同步成功,合并${result.mergedChanges}条`:'已是最新');
+
+    // 记录同步诊断信息
+    const localCounts = {};
+    for(const t of ['teachers','students','lessons','sessions','supervisions']){
+      localCounts[t] = Object.keys(DB.data[t]||{}).filter(id=>!DB.data[t][id]._deleted).length;
+    }
+    lastSyncResult = {
+      time: new Date().toLocaleTimeString(),
+      ok: true,
+      version: result.version,
+      workerVersion: result.workerVersion || 'unknown(旧版!)',
+      mergedChanges: result.mergedChanges || 0,
+      localCounts,
+    };
+
+    if(showToast) toast(result.mergedChanges>0?`✅ 同步成功,合并${result.mergedChanges}条`:'✅ 已是最新');
   }catch(e){
+    lastSyncResult = { time: new Date().toLocaleTimeString(), ok:false, error: e.message||'unknown' };
     if(showToast){
       const msg = e.message||'';
       if(msg.includes('limit exceeded')){
-        toast('❌ 同步失败: 写入次数超限，建议改用 D1 数据库版本（见 SYNC_WORKER_README.md）');
+        toast('❌ 同步失败: 写入次数超限，建议改用 D1 数据库版本');
       } else if(msg.includes('Failed to fetch') || msg.includes('Load failed')){
         toast('❌ 同步失败: 无法连接Worker，检查地址是否正确');
       } else {
@@ -750,6 +792,44 @@ async function doCloudSync(showToast=false){
   }finally{
     syncing=false;
     setSyncInd(false);
+  }
+}
+
+// 重置云端同步数据（清除损坏的嵌套数据后重新同步）
+async function resetCloudSync(){
+  if(!DB.config.workerUrl){ toast('请先填写Worker地址'); return; }
+  if(!confirm('这将清空云端所有同步数据，然后把你当前设备的数据重新上传。\n\n其他设备需要重新同步才能获取数据。\n\n确定继续？')) return;
+  try{
+    toast('正在重置云端数据...');
+    const resp = await fetch(DB.config.workerUrl+'/reset', { method:'POST', headers:{'Content-Type':'application/json'} });
+    if(!resp.ok){ throw new Error('HTTP '+resp.status); }
+    const result = await resp.json();
+    if(result.ok){
+      DB.config.lastSyncVersion = 0;
+      DB.saveConfig();
+      toast('云端数据已清空，正在重新上传...');
+      setTimeout(()=>doCloudSync(true), 500);
+    } else {
+      throw new Error(result.error || 'reset failed');
+    }
+  }catch(e){
+    toast('❌ 重置失败: '+e.message);
+  }
+}
+
+// 检查 Worker 版本（诊断用）
+async function checkWorkerVersion(){
+  if(!DB.config.workerUrl){ toast('请先填写Worker地址'); return; }
+  try{
+    const resp = await fetch(DB.config.workerUrl+'/api/health');
+    const data = await resp.json();
+    if(data.version === '2.0.0'){
+      toast(`✅ Worker版本: v${data.version}, D1: ${data.d1?'正常':'异常'}, 记录数: ${data.recordCount||0}`);
+    } else {
+      toast(`⚠️ Worker版本: ${data.version||'未知(旧版)'}, 需要更新Worker代码！`);
+    }
+  }catch(e){
+    toast('❌ 无法连接Worker: '+e.message);
   }
 }
 
@@ -4375,8 +4455,13 @@ function renderMine(){
     <div style="border-top:1px solid var(--border);margin:8px 0;padding-top:8px">
       <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px">高级：自建 Cloudflare Worker（推荐，最稳定）</div>
       <div class="form-row" style="margin-bottom:4px"><input class="form-control" id="cfg-url" value="${cfg.workerUrl}" placeholder="https://xxx.workers.dev" style="font-size:11px"></div>
-      ${cloudOn?`<button class="btn btn-ghost btn-block" onclick="saveSyncConfig()">保存Worker配置</button>`:`<button class="btn btn-ghost btn-block" onclick="saveSyncConfig()">保存Worker配置</button>`}
-      <div style="font-size:10px;color:var(--text3);margin-top:4px;line-height:1.5">💡 用 D1 数据库版本（写入上限10万次/天），部署说明见仓库 SYNC_WORKER_README.md</div>
+      <div style="display:flex;gap:4px;margin-bottom:4px">
+        <button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="saveSyncConfig()">💾 保存配置</button>
+        <button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="checkWorkerVersion()">🔍 检查Worker</button>
+        <button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="doCloudSync(true)">🔄 立即同步</button>
+      </div>
+      <button class="btn btn-danger btn-block" onclick="resetCloudSync()" style="font-size:11px;margin-bottom:4px">⚠️ 重置云端数据（修复同步问题）</button>
+      <div style="font-size:10px;color:var(--text3);margin-top:4px;line-height:1.5">💡 如果多设备数据不同步，点「检查Worker」确认版本是v2.0.0，如果不是需要重新部署Worker代码。仍不行点「重置云端数据」。</div>
     </div>
     <div style="font-size:10px;color:var(--text3);margin-top:8px;line-height:1.6">
       💡 同步说明：<br>
