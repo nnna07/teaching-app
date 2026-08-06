@@ -539,7 +539,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.13.4';
+const APP_VERSION = 'v3.13.5';
 const APP_VERSION_DATE = '2026-08-06';
 
 const $ = s => document.querySelector(s);
@@ -1526,32 +1526,38 @@ function getSvSubjects(){
 }
 
 function openSupervisionClock(useNow, prefill={}){
-  const today=prefill.date||todayStr();
+  const editId = prefill.editId || '';
+  const editRec = editId ? DB.data.supervisions[editId] : null;
+  const today = editRec ? editRec.date : (prefill.date||todayStr());
   const nowTime=new Date();
   const hh=String(nowTime.getHours()).padStart(2,'0');
   const mm=String(nowTime.getMinutes()).padStart(2,'0');
+  const editSubject = editRec ? editRec.subject : '';
+  const editTime = editRec ? (editRec.time||'') : (prefill.time||'');
+  const editNote = editRec ? (editRec.note||'') : '';
   const students=Object.values(DB.data.students).filter(s=>!s._deleted).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
   const subjects=getSvSubjects();
-  const preSubject = prefill.subject || (svSubjectFilter!=='all'?svSubjectFilter:'');
+  const preSubject = editSubject || prefill.subject || (svSubjectFilter!=='all'?svSubjectFilter:'');
+  const isCustomSubject = editSubject && !subjects.includes(editSubject);
   const html=`
     <div class="form-row">
       <label>科目 *</label>
       <select class="form-control" id="sv-subject" onchange="onSvSubjectChange()">
         <option value="">-- 选择科目 --</option>
         ${subjects.map(s=>`<option value="${s}" ${preSubject===s?'selected':''}>${s}</option>`).join('')}
-        <option value="__custom" ${preSubject==='__custom'?'selected':''}>✏️ 自定义科目</option>
+        <option value="__custom" ${(isCustomSubject||preSubject==='__custom')?'selected':''}>✏️ 自定义科目</option>
       </select>
     </div>
-    <div class="form-row" id="sv-custom-subject-row" style="display:none">
+    <div class="form-row" id="sv-custom-subject-row" style="display:${(isCustomSubject||preSubject==='__custom')?'':'none'}">
       <label>自定义科目名</label>
-      <input type="text" class="form-control" id="sv-custom-subject" placeholder="如：英语阅读">
+      <input type="text" class="form-control" id="sv-custom-subject" placeholder="如：英语阅读" value="${isCustomSubject?editSubject:''}">
     </div>
     <div class="form-row">
       <label>学生 * (可多选)</label>
       <div id="sv-students" style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:6px;background:var(--bg)">
         ${students.length?students.map(s=>{
           const subj=getStudentSubjects(s.id);
-          const checked=prefill.studentId===s.id?'checked':'';
+          const checked=(editRec && editRec.studentId===s.id) || prefill.studentId===s.id ?'checked':'';
           return `<label style="display:flex;align-items:center;gap:6px;padding:4px 6px;cursor:pointer;border-radius:5px" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
             <input type="checkbox" value="${s.id}" style="width:16px;height:16px" ${checked}>
             <span style="font-size:13px">${s.name}</span>
@@ -1572,22 +1578,23 @@ function openSupervisionClock(useNow, prefill={}){
       </div>
       <div class="form-row" style="flex:1">
         <label>时间</label>
-        <input type="time" class="form-control" id="sv-time" value="${useNow?hh+':'+mm:(prefill.time||'')}">
+        <input type="time" class="form-control" id="sv-time" value="${editRec?editTime:(useNow?hh+':'+mm:(prefill.time||''))}">
       </div>
     </div>
     <div class="form-row">
       <label>备注 (可选)</label>
-      <input type="text" class="form-control" id="sv-note" placeholder="如：来校区答疑 / 拿资料 / 家长沟通">
+      <input type="text" class="form-control" id="sv-note" placeholder="如：来校区答疑 / 拿资料 / 家长沟通" value="${editNote}">
     </div>`;
-  const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="saveSupervisionClock()">✓ 记录</button>`;
-  openModal(html,footer); setSheetTitle(useNow?'📍 记录来访（现在）':'📍 记录来访');
+  const isEdit = !!editId;
+  const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="saveSupervisionClock(${isEdit?`'${editId}'`:''})">${isEdit?'✓ 保存修改':'✓ 记录'}</button>`;
+  openModal(html,footer); setSheetTitle(isEdit?'✏️ 编辑打卡记录':(useNow?'📍 记录来访（现在）':'📍 记录来访'));
 }
 function onSvSubjectChange(){
   const v=$('#sv-subject').value;
   $('#sv-custom-subject-row').style.display = v==='__custom'?'':'none';
 }
 function svSelectAllStudents(v){ document.querySelectorAll('#sv-students input[type=checkbox]').forEach(cb=>cb.checked=v); }
-function saveSupervisionClock(){
+function saveSupervisionClock(editId=''){
   const subjVal=$('#sv-subject')?.value||'';
   let subject='';
   if(subjVal==='__custom'){
@@ -1604,14 +1611,35 @@ function saveSupervisionClock(){
   const time=$('#sv-time')?.value||'';
   const note=$('#sv-note')?.value.trim()||'';
   const t=now();
-  stuIds.forEach(sid=>{
-    const id=uid();
-    DB.data.supervisions[id]={id,studentId:sid,subject,date,time,note,createdAt:t,updatedAt:t};
-  });
-  DB.save();
+
+  if(editId && DB.data.supervisions[editId]){
+    // 编辑模式：更新已有记录
+    const rec=DB.data.supervisions[editId];
+    rec.subject=subject;
+    rec.studentId=stuIds[0]; // 编辑时取第一个选中的学生
+    rec.date=date;
+    rec.time=time;
+    rec.note=note;
+    rec.updatedAt=t;
+    DB.save();
+    closeModal();
+    renderSupervisions();
+    toast('✓ 已修改记录');
+  } else {
+    // 新建模式：为每个选中的学生创建记录
+    stuIds.forEach(sid=>{
+      const id=uid();
+      DB.data.supervisions[id]={id,studentId:sid,subject,date,time,note,createdAt:t,updatedAt:t};
+    });
+    DB.save();
+    closeModal();
+    renderSupervisions();
+    toast(`✓ 已记录 ${stuIds.length} 名学生 ${subject} 来访`);
+  }
+}
+function editSupervision(id){
   closeModal();
-  renderSupervisions();
-  toast(`✓ 已记录 ${stuIds.length} 名学生 ${subject} 来访`);
+  setTimeout(()=>openSupervisionClock(false,{editId:id}),100);
 }
 function delSupervision(id){
   if(!confirm('确定删除这条督学打卡记录？')) return;
@@ -1777,7 +1805,10 @@ function showSvPersonDay(studentId, date){
           </div>
           <div style="font-size:11px;color:var(--text3)">${s.time?'🕐 '+s.time:''}${s.note?' · 📝 '+s.note:''}</div>
         </div>
-        <button class="btn btn-sm btn-danger" onclick="delSupervision('${s.id}')">删除</button>
+        <div style="display:flex;gap:4px;flex-shrink:0">
+          <button class="btn btn-sm btn-ghost" onclick="editSupervision('${s.id}')">编辑</button>
+          <button class="btn btn-sm btn-danger" onclick="delSupervision('${s.id}')">删除</button>
+        </div>
       </div>
     </div>`;
   });
@@ -1827,7 +1858,10 @@ function renderSupervisionList(list){
               <div style="font-weight:600;font-size:13px">${stu&&!stu._deleted?stu.name:'(学生已删除)'}</div>
               <div style="font-size:11px;color:var(--text3);margin-top:2px">${s.time?'🕐 '+s.time:''}${s.note?' · 📝 '+s.note:''}</div>
             </div>
-            <button class="btn btn-sm btn-danger" onclick="delSupervision('${s.id}')">删除</button>
+            <div style="display:flex;gap:4px;flex-shrink:0">
+              <button class="btn btn-sm btn-ghost" onclick="editSupervision('${s.id}')">编辑</button>
+              <button class="btn btn-sm btn-danger" onclick="delSupervision('${s.id}')">删除</button>
+            </div>
           </div>
         </div>`;
       });
@@ -1919,7 +1953,10 @@ function showSvDay(date){
             <div style="font-weight:600;font-size:13px">${stu&&!stu._deleted?stu.name:'(学生已删除)'}</div>
             <div style="font-size:11px;color:var(--text3);margin-top:2px">${s.time?'🕐 '+s.time:''}${s.note?' · 📝 '+s.note:''}</div>
           </div>
-          <button class="btn btn-sm btn-danger" onclick="delSupervision('${s.id}')">删除</button>
+          <div style="display:flex;gap:4px;flex-shrink:0">
+            <button class="btn btn-sm btn-ghost" onclick="editSupervision('${s.id}')">编辑</button>
+            <button class="btn btn-sm btn-danger" onclick="delSupervision('${s.id}')">删除</button>
+          </div>
         </div>
       </div>`;
     });
