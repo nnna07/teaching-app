@@ -539,7 +539,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.13.7';
+const APP_VERSION = 'v3.13.8';
 const APP_VERSION_DATE = '2026-08-06';
 
 const $ = s => document.querySelector(s);
@@ -718,7 +718,7 @@ function currentTeacher(){ return DB.data.teachers[DB.data.currentTeacherId]; }
 
 /* ==================== 云端同步 ==================== */
 let syncTimer = null;
-let syncing = false;
+let syncing = false; // 同步锁，页面加载时自动重置为 false
 let lastSyncResult = null; // 记录最近一次同步结果，用于诊断
 
 function scheduleCloudSync(){
@@ -742,15 +742,18 @@ function unwrapSyncData(obj){
 }
 
 async function doCloudSync(showToast=false){
-  if(!DB.config.workerUrl || syncing) return;
+  if(!DB.config.workerUrl){ if(showToast) toast('请先填写Worker地址'); return; }
+  if(syncing){ if(showToast) toast('⏳ 正在同步中，请稍候...'); return; }
   syncing = true;
   setSyncInd(true);
+  if(showToast) toast('🔄 正在同步...');
   try{
     const exportData = DB.export();
     const resp = await fetch(DB.config.workerUrl+'/sync', {
       method:'POST',
       headers:{'Content-Type':'application/json','X-Client-Id':DB.config.clientId},
-      body: JSON.stringify({ local: exportData, clientId: DB.config.clientId, lastVersion: DB.config.lastSyncVersion })
+      body: JSON.stringify({ local: exportData, clientId: DB.config.clientId, lastVersion: DB.config.lastSyncVersion }),
+      signal: AbortSignal.timeout(15000)
     });
     if(!resp.ok){
       let errMsg = 'HTTP '+resp.status;
@@ -827,8 +830,9 @@ async function resetCloudSync(){
 // 检查 Worker 版本（诊断用）
 async function checkWorkerVersion(){
   if(!DB.config.workerUrl){ toast('请先填写Worker地址'); return; }
+  toast('🔍 正在检查...');
   try{
-    const resp = await fetch(DB.config.workerUrl+'/api/health');
+    const resp = await fetch(DB.config.workerUrl+'/api/health', { signal: AbortSignal.timeout(10000) });
     const data = await resp.json();
     const v = data.version || '';
     if(v === '2.0.0' || v === '2.1.0'){
@@ -845,15 +849,18 @@ async function checkWorkerVersion(){
 async function pullCloudOnly(){
   if(!DB.config.workerUrl){ toast('请先填写Worker地址'); return; }
   if(!confirm('这将用云端数据完全替换你本地所有数据。\n\n适合新设备首次使用：直接拉取云端全部数据。\n\n确定继续？')) return;
+  if(syncing){ toast('⏳ 正在同步中，请稍候...'); return; }
   syncing = true;
   setSyncInd(true);
+  toast('📥 正在拉取云端数据...');
   try{
     // 发送空数据，只拿云端数据
     const emptyLocal = { teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, settings:{} };
     const resp = await fetch(DB.config.workerUrl+'/sync', {
       method:'POST',
       headers:{'Content-Type':'application/json','X-Client-Id':DB.config.clientId},
-      body: JSON.stringify({ local: emptyLocal, clientId: DB.config.clientId, lastVersion: 0 })
+      body: JSON.stringify({ local: emptyLocal, clientId: DB.config.clientId, lastVersion: 0 }),
+      signal: AbortSignal.timeout(15000)
     });
     if(!resp.ok) throw new Error('HTTP '+resp.status);
     const result = await resp.json();
@@ -5393,7 +5400,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v4';
+    const sw=`const C='tw-cache-v5';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
