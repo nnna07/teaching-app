@@ -539,7 +539,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.13.6';
+const APP_VERSION = 'v3.13.7';
 const APP_VERSION_DATE = '2026-08-06';
 
 const $ = s => document.querySelector(s);
@@ -830,10 +830,11 @@ async function checkWorkerVersion(){
   try{
     const resp = await fetch(DB.config.workerUrl+'/api/health');
     const data = await resp.json();
-    if(data.version === '2.0.0'){
-      toast(`✅ Worker版本: v${data.version}, D1: ${data.d1?'正常':'异常'}, 记录数: ${data.recordCount||0}`);
+    const v = data.version || '';
+    if(v === '2.0.0' || v === '2.1.0'){
+      toast(`✅ Worker版本: v${v}, D1: ${data.d1?'正常':'异常'}, 记录数: ${data.recordCount||0}`);
     } else {
-      toast(`⚠️ Worker版本: ${data.version||'未知(旧版)'}, 需要更新Worker代码！`);
+      toast(`⚠️ Worker版本: ${v||'未知(旧版)'}, 需要更新Worker代码！`);
     }
   }catch(e){
     toast('❌ 无法连接Worker: '+e.message);
