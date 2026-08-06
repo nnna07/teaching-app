@@ -491,6 +491,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
       <div class="card-h"><h3>📤 导出数据</h3></div>
       <button class="btn btn-primary btn-block" onclick="openExport()" style="margin-bottom:6px">Excel 多维度导出</button>
       <button class="btn btn-ghost btn-block" onclick="exportFile()" style="margin-bottom:6px">导出 JSON 全量备份</button>
+      <button class="btn btn-ghost btn-block" onclick="seedDemo()" style="margin-bottom:6px">📝 载入示例数据（新手体验）</button>
       <button class="btn btn-danger btn-block" onclick="resetData()">🗑️ 清空所有数据</button>
     </div>
     <div class="card">
@@ -538,8 +539,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.13.1';
-const APP_VERSION_DATE = '2026-08-02';
+const APP_VERSION = 'v3.13.4';
+const APP_VERSION_DATE = '2026-08-06';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -638,12 +639,14 @@ const DB = {
   init(){
     const cfg = localStorage.getItem(this.CONFIG_KEY);
     if(cfg){ try{ this.config = JSON.parse(cfg); }catch(e){ this.config=null; } }
-    if(!this.config){ this.config = { workerUrl:'', clientId:uid(), lastSyncVersion:0, autoSync:true, freeSyncKey:'', freeSyncBlobId:'', freeSyncOn:false }; this.saveConfig(); }
+    if(!this.config){ this.config = { workerUrl:'https://teach-worker.578874944.workers.dev', clientId:uid(), lastSyncVersion:0, autoSync:true, freeSyncKey:'', freeSyncBlobId:'', freeSyncOn:false }; this.saveConfig(); }
     if(!this.config.freeSyncKey && this.config.freeSyncOn===undefined) this.config.freeSyncOn=false;
+    // 如果没有填 Worker URL，预填默认地址
+    if(!this.config.workerUrl){ this.config.workerUrl='https://teach-worker.578874944.workers.dev'; this.saveConfig(); }
     if(!this.config.workerUrl && location.protocol.startsWith('http')){
       const origin = location.origin;
       fetch(origin+'/api/health').then(r=>r.json()).then(d=>{
-        if(d.ok && d.service==='teach-sync'){
+        if(d.ok && (d.service==='teach-sync' || d.service==='teach-sync-d1' || d.service==='teach-sync-d1-v2')){
           this.config.workerUrl = origin;
           this.saveConfig();
           setSyncInd(false);
@@ -830,6 +833,56 @@ async function checkWorkerVersion(){
     }
   }catch(e){
     toast('❌ 无法连接Worker: '+e.message);
+  }
+}
+
+// 仅拉取云端数据，完全覆盖本地（新用户首次同步用）
+async function pullCloudOnly(){
+  if(!DB.config.workerUrl){ toast('请先填写Worker地址'); return; }
+  if(!confirm('这将用云端数据完全替换你本地所有数据。\n\n适合新设备首次使用：直接拉取云端全部数据。\n\n确定继续？')) return;
+  syncing = true;
+  setSyncInd(true);
+  try{
+    // 发送空数据，只拿云端数据
+    const emptyLocal = { teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, settings:{} };
+    const resp = await fetch(DB.config.workerUrl+'/sync', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Client-Id':DB.config.clientId},
+      body: JSON.stringify({ local: emptyLocal, clientId: DB.config.clientId, lastVersion: 0 })
+    });
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    const result = await resp.json();
+    if(result.data){
+      let syncData = unwrapSyncData(result.data);
+      // 直接替换本地数据
+      DB.data = { _updatedAt:now(), _version:0, currentTeacherId:null,
+        teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, settings:{} };
+      for(const table of ['teachers','students','lessons','sessions','supervisions','settings']){
+        if(syncData[table]){
+          for(const id in syncData[table]){
+            if(!syncData[table][id]._deleted){
+              DB.data[table][id] = syncData[table][id];
+            }
+          }
+        }
+      }
+      DB.config.lastSyncVersion = result.version;
+      DB.saveConfig();
+      DB.save();
+      refreshCurrentView();
+      const counts = {};
+      for(const t of ['teachers','students','lessons','sessions','supervisions']){
+        counts[t] = Object.keys(DB.data[t]).length;
+      }
+      toast(`✅ 拉取成功: 老师${counts.teachers} 学生${counts.students} 课次${counts.lessons} 上课${counts.sessions} 打卡${counts.supervisions}`);
+    } else {
+      toast('云端没有数据');
+    }
+  }catch(e){
+    toast('❌ 拉取失败: '+e.message);
+  }finally{
+    syncing = false;
+    setSyncInd(false);
   }
 }
 
@@ -4461,6 +4514,7 @@ function renderMine(){
         <button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="doCloudSync(true)">🔄 立即同步</button>
       </div>
       <button class="btn btn-danger btn-block" onclick="resetCloudSync()" style="font-size:11px;margin-bottom:4px">⚠️ 重置云端数据（修复同步问题）</button>
+      <button class="btn btn-primary btn-block" onclick="pullCloudOnly()" style="font-size:11px;margin-bottom:4px">📥 仅拉取云端（覆盖本地，新设备用）</button>
       <div style="font-size:10px;color:var(--text3);margin-top:4px;line-height:1.5">💡 如果多设备数据不同步，点「检查Worker」确认版本是v2.0.0，如果不是需要重新部署Worker代码。仍不行点「重置云端数据」。</div>
     </div>
     <div style="font-size:10px;color:var(--text3);margin-top:8px;line-height:1.6">
@@ -5252,7 +5306,7 @@ function resetData(){
   localStorage.removeItem(DB.CONFIG_KEY);
   // 重置内存数据为空种子
   DB.data = DB._seed();
-  DB.config = { workerUrl:'', clientId:uid(), lastSyncVersion:0, autoSync:true, freeSyncKey:'', freeSyncBlobId:'', freeSyncOn:false };
+  DB.config = { workerUrl:'https://teach-worker.578874944.workers.dev', clientId:uid(), lastSyncVersion:0, autoSync:true, freeSyncKey:'', freeSyncBlobId:'', freeSyncOn:false };
   DB.save();
   DB.saveConfig();
   closeModal(); switchTab('mine'); renderMine();
@@ -5354,7 +5408,7 @@ function init(){
   DB.init();
   setupPWA();
   checkVersionUpdate();
-  if(Object.keys(DB.data.teachers).length===0) seedDemo();
+  // 不再自动填充示例数据，新用户从空数据开始，方便云端同步
   switchTab('lessons');
   setSyncInd(false);
 }
