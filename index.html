@@ -539,7 +539,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.13.5';
+const APP_VERSION = 'v3.13.6';
 const APP_VERSION_DATE = '2026-08-06';
 
 const $ = s => document.querySelector(s);
@@ -728,11 +728,15 @@ function scheduleCloudSync(){
 
 // 递归解包嵌套的 {data:...} 层
 function unwrapSyncData(obj){
+  const TABLES=['teachers','students','lessons','sessions','supervisions','settings'];
   let depth=0;
-  while(obj && typeof obj==='object' && !Array.isArray(obj) && obj.data && typeof obj.data==='object' && !Array.isArray(obj.data)){
-    const keys=Object.keys(obj);
-    if(keys.length<=2 && keys.includes('data')){ obj=obj.data; depth++; if(depth>100) break; }
-    else break;
+  while(obj && typeof obj==='object' && !Array.isArray(obj)){
+    // 如果对象本身有真实表字段（且有数据），停止解包
+    const hasTables=TABLES.some(t=>obj[t] && typeof obj[t]==='object' && Object.keys(obj[t]).length>0);
+    if(hasTables) break;
+    if(obj.data && typeof obj.data==='object' && !Array.isArray(obj.data)){
+      obj=obj.data; depth++; if(depth>200) break;
+    } else break;
   }
   return obj;
 }
