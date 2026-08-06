@@ -539,7 +539,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.13.10';
+const APP_VERSION = 'v3.13.11';
 const APP_VERSION_DATE = '2026-08-06';
 
 const $ = s => document.querySelector(s);
@@ -882,7 +882,7 @@ async function checkWorkerVersion(){
     const resp = await fetchWithTimeout(DB.config.workerUrl+'/api/health', {}, 10000);
     const data = await resp.json();
     const v = data.version || '';
-    if(v === '2.0.0' || v === '2.1.0'){
+    if(v === '2.0.0' || v === '2.1.0' || v === '2.2.0'){
       toast(`✅ Worker版本: v${v}, D1: ${data.d1?'正常':'异常'}, 记录数: ${data.recordCount||0}`);
     } else {
       toast(`⚠️ Worker版本: ${v||'未知(旧版)'}, 需要更新Worker代码！`);
@@ -899,45 +899,65 @@ async function pullCloudOnly(){
   if(syncing){ toast('⏳ 正在同步中，请稍候...'); return; }
   syncing = true;
   setSyncInd(true);
-  toast('📥 正在拉取云端数据...');
+  toast('📥 正在拉取云端数据（GET 轻量模式）...');
+  let lastErr = null;
   try{
-    // 发送空数据，只拿云端数据
-    const emptyLocal = { teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, settings:{} };
-    const resp = await fetchWithTimeout(DB.config.workerUrl+'/sync', {
-      method:'POST',
-      headers:{'Content-Type':'application/json','X-Client-Id':DB.config.clientId},
-      body: JSON.stringify({ local: emptyLocal, clientId: DB.config.clientId, lastVersion: 0 })
-    }, 30000);
-    if(!resp.ok) throw new Error('HTTP '+resp.status);
-    const result = await resp.json();
-    if(result.data){
-      let syncData = unwrapSyncData(result.data);
-      // 直接替换本地数据
-      DB.data = { _updatedAt:now(), _version:0, currentTeacherId:null,
-        teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, settings:{} };
-      for(const table of ['teachers','students','lessons','sessions','supervisions','settings']){
-        if(syncData[table]){
-          for(const id in syncData[table]){
-            if(!syncData[table][id]._deleted){
-              DB.data[table][id] = syncData[table][id];
+    // 优先用 GET /pull（无 CORS 预检，最轻量），失败再降级 POST /sync
+    for(let attempt=0; attempt<2; attempt++){
+      try{
+        let resp, result;
+        if(attempt===0){
+          // 第一次：GET /pull（简单请求，无预检）
+          resp = await fetchWithTimeout(DB.config.workerUrl+'/pull', { method:'GET' }, 30000);
+        } else {
+          // 降级：POST /sync 发空数据
+          const emptyLocal = { teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, settings:{} };
+          resp = await fetchWithTimeout(DB.config.workerUrl+'/sync', {
+            method:'POST',
+            headers:{'Content-Type':'application/json','X-Client-Id':DB.config.clientId},
+            body: JSON.stringify({ local: emptyLocal, clientId: DB.config.clientId, lastVersion: 0 })
+          }, 30000);
+        }
+        if(!resp.ok) throw new Error('HTTP '+resp.status);
+        result = await resp.json();
+        if(result.data){
+          let syncData = unwrapSyncData(result.data);
+          // 直接替换本地数据
+          DB.data = { _updatedAt:now(), _version:0, currentTeacherId:null,
+            teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, settings:{} };
+          for(const table of ['teachers','students','lessons','sessions','supervisions','settings']){
+            if(syncData[table]){
+              for(const id in syncData[table]){
+                if(!syncData[table][id]._deleted){
+                  DB.data[table][id] = syncData[table][id];
+                }
+              }
             }
           }
+          DB.config.lastSyncVersion = result.version;
+          DB.saveConfig();
+          DB.save();
+          refreshCurrentView();
+          const counts = {};
+          for(const t of ['teachers','students','lessons','sessions','supervisions']){
+            counts[t] = Object.keys(DB.data[t]).length;
+          }
+          toast(`✅ 拉取成功: 老师${counts.teachers} 学生${counts.students} 课次${counts.lessons} 上课${counts.sessions} 打卡${counts.supervisions}`);
+          return;
+        } else {
+          toast('云端没有数据');
+          return;
+        }
+      }catch(e){
+        lastErr = e;
+        if(attempt===0){
+          toast('⚠️ GET 拉取失败，尝试 POST 模式...');
+          await new Promise(r=>setTimeout(r, 800));
         }
       }
-      DB.config.lastSyncVersion = result.version;
-      DB.saveConfig();
-      DB.save();
-      refreshCurrentView();
-      const counts = {};
-      for(const t of ['teachers','students','lessons','sessions','supervisions']){
-        counts[t] = Object.keys(DB.data[t]).length;
-      }
-      toast(`✅ 拉取成功: 老师${counts.teachers} 学生${counts.students} 课次${counts.lessons} 上课${counts.sessions} 打卡${counts.supervisions}`);
-    } else {
-      toast('云端没有数据');
     }
-  }catch(e){
-    toast('❌ 拉取失败: '+e.message);
+    // 两次都失败
+    toast('❌ 拉取失败: '+(lastErr?.message||'unknown')+'。建议先用「检查Worker」测试连通性');
   }finally{
     syncing = false;
     setSyncInd(false);
@@ -5446,7 +5466,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v6';
+    const sw=`const C='tw-cache-v7';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
