@@ -539,7 +539,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.13.9';
+const APP_VERSION = 'v3.13.10';
 const APP_VERSION_DATE = '2026-08-06';
 
 const $ = s => document.querySelector(s);
@@ -721,8 +721,8 @@ let syncTimer = null;
 let syncing = false; // 同步锁，页面加载时自动重置为 false
 let lastSyncResult = null; // 记录最近一次同步结果，用于诊断
 
-// 兼容老手机的 fetch 超时方案
-function fetchWithTimeout(url, options={}, timeout=15000){
+// 兼容老手机的 fetch 超时方案（默认30秒，给慢网络留余量）
+function fetchWithTimeout(url, options={}, timeout=30000){
   return new Promise((resolve, reject)=>{
     const controller = new AbortController();
     const timer = setTimeout(()=>{ controller.abort(); reject(new Error('请求超时('+timeout/1000+'秒)')); }, timeout);
@@ -754,6 +754,52 @@ function unwrapSyncData(obj){
 async function doCloudSync(showToast=false){
   if(!DB.config.workerUrl){ if(showToast) toast('请先填写Worker地址'); return; }
   if(syncing){ if(showToast) toast('⏳ 正在同步中，请稍候...'); return; }
+
+  // 自动重试包装：超时/网络错误自动重试一次
+  const result = await doCloudSyncWithRetry(showToast);
+  return result;
+}
+
+async function doCloudSyncWithRetry(showToast){
+  const MAX_RETRY = 1; // 最多重试1次
+  let attempt = 0;
+  let lastErr = null;
+  while(attempt <= MAX_RETRY){
+    try{
+      await doCloudSyncOnce(showToast && attempt===0); // 只在第一次失败后弹toast
+      return; // 成功
+    }catch(e){
+      lastErr = e;
+      const msg = e.message||'';
+      const isTimeout = msg.includes('超时') || msg.includes('Failed to fetch') || msg.includes('Load failed') || msg.includes('aborted');
+      // 文件太大、HTTP错误这类不重试
+      const isHardError = msg.includes('HTTP ') || msg.includes('limit exceeded');
+      if(!isTimeout || isHardError || attempt>=MAX_RETRY){
+        // 不可重试的错误 或 已达重试上限
+        if(showToast){
+          if(msg.includes('limit exceeded')){
+            toast('❌ 同步失败: 写入次数超限，建议改用 D1 数据库版本');
+          } else if(msg.includes('Failed to fetch') || msg.includes('Load failed')){
+            toast('❌ 同步失败: 无法连接Worker，检查地址是否正确');
+          } else if(msg.includes('超时')){
+            toast('❌ 同步失败: 网络太慢，已重试1次仍超时，请在WiFi下重试');
+          } else {
+            toast('❌ 同步失败: '+msg);
+          }
+        }
+        // 记录同步诊断信息
+        lastSyncResult = { time: new Date().toLocaleTimeString(), ok:false, error: msg||'unknown' };
+        return;
+      }
+      // 准备重试
+      attempt++;
+      if(showToast) toast(`⚠️ 网络不稳定，正在重试（${attempt}/${MAX_RETRY}）...`);
+      await new Promise(r=>setTimeout(r, 1000)); // 重试前等1秒
+    }
+  }
+}
+
+async function doCloudSyncOnce(showToast=false){
   syncing = true;
   setSyncInd(true);
   if(showToast) toast('🔄 正在同步...');
@@ -763,7 +809,7 @@ async function doCloudSync(showToast=false){
       method:'POST',
       headers:{'Content-Type':'application/json','X-Client-Id':DB.config.clientId},
       body: JSON.stringify({ local: exportData, clientId: DB.config.clientId, lastVersion: DB.config.lastSyncVersion })
-    }, 15000);
+    }, 30000);
     if(!resp.ok){
       let errMsg = 'HTTP '+resp.status;
       try{ const errBody = await resp.json(); if(errBody.error) errMsg += ': '+errBody.error; }catch(e){}
@@ -796,18 +842,10 @@ async function doCloudSync(showToast=false){
     };
 
     if(showToast) toast(result.mergedChanges>0?`✅ 同步成功,合并${result.mergedChanges}条`:'✅ 已是最新');
+    return; // 成功
   }catch(e){
-    lastSyncResult = { time: new Date().toLocaleTimeString(), ok:false, error: e.message||'unknown' };
-    if(showToast){
-      const msg = e.message||'';
-      if(msg.includes('limit exceeded')){
-        toast('❌ 同步失败: 写入次数超限，建议改用 D1 数据库版本');
-      } else if(msg.includes('Failed to fetch') || msg.includes('Load failed')){
-        toast('❌ 同步失败: 无法连接Worker，检查地址是否正确');
-      } else {
-        toast('❌ 同步失败: '+msg);
-      }
-    }
+    // 抛出错误由外层重试逻辑统一处理（包括 toast）
+    throw e;
   }finally{
     syncing=false;
     setSyncInd(false);
@@ -869,7 +907,7 @@ async function pullCloudOnly(){
       method:'POST',
       headers:{'Content-Type':'application/json','X-Client-Id':DB.config.clientId},
       body: JSON.stringify({ local: emptyLocal, clientId: DB.config.clientId, lastVersion: 0 })
-    }, 15000);
+    }, 30000);
     if(!resp.ok) throw new Error('HTTP '+resp.status);
     const result = await resp.json();
     if(result.data){
@@ -5408,7 +5446,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v5';
+    const sw=`const C='tw-cache-v6';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
