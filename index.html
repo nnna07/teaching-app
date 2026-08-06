@@ -512,7 +512,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
       4. 📝记录：日/周/月/年四视图，番茄TODO风格可视化<br>
       5. 🎓学生管理：彩色方块显示课时进度，可加可减<br>
       6. 📍督学打卡：记录学生来访，按科目分组，月历格子可视化<br>
-      7. 💾自动同步：一键开启免费云端同步，跨设备/跨浏览器自动同步数据<br>
+      7. 💾自动同步：腾讯云COS云端同步（国内直连），跨设备/跨浏览器自动同步数据<br>
       8. 手机浏览器菜单"添加到主屏幕"可像App使用，更新后自动刷新
     </div>
   </div>
@@ -539,7 +539,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.13.11';
+const APP_VERSION = 'v3.15.0';
 const APP_VERSION_DATE = '2026-08-06';
 
 const $ = s => document.querySelector(s);
@@ -639,20 +639,10 @@ const DB = {
   init(){
     const cfg = localStorage.getItem(this.CONFIG_KEY);
     if(cfg){ try{ this.config = JSON.parse(cfg); }catch(e){ this.config=null; } }
-    if(!this.config){ this.config = { workerUrl:'https://teach-worker.578874944.workers.dev', clientId:uid(), lastSyncVersion:0, autoSync:true, freeSyncKey:'', freeSyncBlobId:'', freeSyncOn:false }; this.saveConfig(); }
+    if(!this.config){ this.config = { cosBucket:'', cosRegion:'', cosSecretId:'', cosSecretKey:'', clientId:uid(), lastSyncVersion:0, autoSync:true, freeSyncKey:'', freeSyncBlobId:'', freeSyncOn:false }; this.saveConfig(); }
     if(!this.config.freeSyncKey && this.config.freeSyncOn===undefined) this.config.freeSyncOn=false;
-    // 如果没有填 Worker URL，预填默认地址
-    if(!this.config.workerUrl){ this.config.workerUrl='https://teach-worker.578874944.workers.dev'; this.saveConfig(); }
-    if(!this.config.workerUrl && location.protocol.startsWith('http')){
-      const origin = location.origin;
-      fetch(origin+'/api/health').then(r=>r.json()).then(d=>{
-        if(d.ok && (d.service==='teach-sync' || d.service==='teach-sync-d1' || d.service==='teach-sync-d1-v2')){
-          this.config.workerUrl = origin;
-          this.saveConfig();
-          setSyncInd(false);
-        }
-      }).catch(()=>{});
-    }
+    // 兼容旧配置：如果没有 cosBucket 字段，补上
+    if(this.config.cosBucket===undefined){ this.config.cosBucket=''; this.config.cosRegion=''; this.config.cosSecretId=''; this.config.cosSecretKey=''; this.saveConfig(); }
     const saved = localStorage.getItem(this.KEY);
     if(saved){ try{ this.data = JSON.parse(saved); }catch(e){ this.data=null; } }
     if(!this.data){ this.data = this._seed(); this.save(); }
@@ -667,7 +657,7 @@ const DB = {
   save(){
     this.data._updatedAt = now();
     localStorage.setItem(this.KEY, JSON.stringify(this.data));
-    if(this.config && this.config.autoSync && this.config.workerUrl){ scheduleCloudSync(); }
+    if(this.config && this.config.autoSync && isCosConfigured()){ scheduleCloudSync(); }
     if(this.config && this.config.freeSyncOn && this.config.freeSyncBlobId){ scheduleFreeSync(); }
     // 广播给同浏览器其他标签页
     try{ if(syncBC) syncBC.postMessage({type:'update', updatedAt:this.data._updatedAt}); }catch(e){}
@@ -751,213 +741,209 @@ function unwrapSyncData(obj){
   return obj;
 }
 
-async function doCloudSync(showToast=false){
-  if(!DB.config.workerUrl){ if(showToast) toast('请先填写Worker地址'); return; }
-  if(syncing){ if(showToast) toast('⏳ 正在同步中，请稍候...'); return; }
+// ==================== 腾讯云 COS 云端同步（国内直连，稳定可靠） ====================
+function isCosConfigured(){
+  return DB.config.cosBucket && DB.config.cosRegion && DB.config.cosSecretId && DB.config.cosSecretKey;
+}
+function cosHost(){
+  return `${DB.config.cosBucket}.cos.${DB.config.cosRegion}.myqcloud.com`;
+}
+const COS_SYNC_KEY = 'teach-sync.json';
 
-  // 自动重试包装：超时/网络错误自动重试一次
-  const result = await doCloudSyncWithRetry(showToast);
-  return result;
+// HMAC-SHA1 (Web Crypto API)
+async function hmacSha1Hex(keyStr, msgStr){
+  const enc = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey('raw', enc.encode(keyStr), {name:'HMAC', hash:'SHA-1'}, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', cryptoKey, enc.encode(msgStr));
+  return Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+// SHA-1 hex
+async function sha1Hex(msgStr){
+  const enc = new TextEncoder();
+  const hash = await crypto.subtle.digest('SHA-1', enc.encode(msgStr));
+  return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,'0')).join('');
 }
 
-async function doCloudSyncWithRetry(showToast){
-  const MAX_RETRY = 1; // 最多重试1次
-  let attempt = 0;
-  let lastErr = null;
-  while(attempt <= MAX_RETRY){
-    try{
-      await doCloudSyncOnce(showToast && attempt===0); // 只在第一次失败后弹toast
-      return; // 成功
-    }catch(e){
-      lastErr = e;
-      const msg = e.message||'';
-      const isTimeout = msg.includes('超时') || msg.includes('Failed to fetch') || msg.includes('Load failed') || msg.includes('aborted');
-      // 文件太大、HTTP错误这类不重试
-      const isHardError = msg.includes('HTTP ') || msg.includes('limit exceeded');
-      if(!isTimeout || isHardError || attempt>=MAX_RETRY){
-        // 不可重试的错误 或 已达重试上限
-        if(showToast){
-          if(msg.includes('limit exceeded')){
-            toast('❌ 同步失败: 写入次数超限，建议改用 D1 数据库版本');
-          } else if(msg.includes('Failed to fetch') || msg.includes('Load failed')){
-            toast('❌ 同步失败: 无法连接Worker，检查地址是否正确');
-          } else if(msg.includes('超时')){
-            toast('❌ 同步失败: 网络太慢，已重试1次仍超时，请在WiFi下重试');
-          } else {
-            toast('❌ 同步失败: '+msg);
-          }
-        }
-        // 记录同步诊断信息
-        lastSyncResult = { time: new Date().toLocaleTimeString(), ok:false, error: msg||'unknown' };
-        return;
-      }
-      // 准备重试
-      attempt++;
-      if(showToast) toast(`⚠️ 网络不稳定，正在重试（${attempt}/${MAX_RETRY}）...`);
-      await new Promise(r=>setTimeout(r, 1000)); // 重试前等1秒
-    }
+// 生成 COS v1 签名 Authorization header
+async function cosAuth(method){
+  const secretId = DB.config.cosSecretId;
+  const secretKey = DB.config.cosSecretKey;
+  const now = Math.floor(Date.now()/1000);
+  const exp = 600; // 10 分钟有效
+  const keyTime = `${now};${now+exp}`;
+  // SignKey = HMAC-SHA1(SecretKey, KeyTime)
+  const signKey = await hmacSha1Hex(secretKey, keyTime);
+  // FormatString = HttpMethod\nUriPath\nHttpParameters\nHttpHeaders\n
+  const httpMethod = method.toLowerCase();
+  const uriPath = '/' + COS_SYNC_KEY;
+  const formatString = `${httpMethod}\n${uriPath}\n\n\n`;
+  // StringToSign = sha1\nKeyTime\nSHA1(FormatString)\n
+  const sha1Format = await sha1Hex(formatString);
+  const stringToSign = `sha1\n${keyTime}\n${sha1Format}\n`;
+  // Signature = HMAC-SHA1(SignKey, StringToSign)
+  const signature = await hmacSha1Hex(signKey, stringToSign);
+  return `q-sign-algorithm=sha1&q-ak=${secretId}&q-sign-time=${keyTime}&q-key-time=${keyTime}&q-header-list=&q-url-param-list=&q-signature=${signature}`;
+}
+
+// 从 COS 读取同步数据（不存在返回 null）
+async function cosRead(){
+  const auth = await cosAuth('GET');
+  const resp = await fetchWithTimeout(`https://${cosHost()}/${COS_SYNC_KEY}`, {
+    method:'GET', headers:{ 'Authorization': auth }
+  }, 30000);
+  if(resp.status === 404) return null;
+  if(!resp.ok) throw new Error('COS GET HTTP '+resp.status);
+  return await resp.text();
+}
+
+// 写入同步数据到 COS
+async function cosWrite(text){
+  const auth = await cosAuth('PUT');
+  const resp = await fetchWithTimeout(`https://${cosHost()}/${COS_SYNC_KEY}`, {
+    method:'PUT',
+    headers:{ 'Authorization': auth, 'Content-Type': 'application/json' },
+    body: text
+  }, 30000);
+  if(!resp.ok){
+    let errBody = '';
+    try{ errBody = await resp.text(); }catch(e){}
+    throw new Error('COS PUT HTTP '+resp.status+(errBody?' '+errBody.slice(0,200):''));
   }
+  return true;
 }
 
-async function doCloudSyncOnce(showToast=false){
+// HEAD 检查文件是否存在（用于连接诊断）
+async function cosHead(){
+  const auth = await cosAuth('GET'); // HEAD 和 GET 用同样的签名
+  const resp = await fetchWithTimeout(`https://${cosHost()}/${COS_SYNC_KEY}`, {
+    method:'HEAD', headers:{ 'Authorization': auth }
+  }, 10000);
+  return resp.status;
+}
+
+async function doCloudSync(showToast=false){
+  if(!isCosConfigured()){ if(showToast) toast('请先填写腾讯云COS配置'); return; }
+  if(syncing){ if(showToast) toast('⏳ 正在同步中，请稍候...'); return; }
   syncing = true;
   setSyncInd(true);
   if(showToast) toast('🔄 正在同步...');
   try{
     const exportData = DB.export();
-    const resp = await fetchWithTimeout(DB.config.workerUrl+'/sync', {
-      method:'POST',
-      headers:{'Content-Type':'application/json','X-Client-Id':DB.config.clientId},
-      body: JSON.stringify({ local: exportData, clientId: DB.config.clientId, lastVersion: DB.config.lastSyncVersion })
-    }, 30000);
-    if(!resp.ok){
-      let errMsg = 'HTTP '+resp.status;
-      try{ const errBody = await resp.json(); if(errBody.error) errMsg += ': '+errBody.error; }catch(e){}
-      throw new Error(errMsg);
-    }
-    const result = await resp.json();
-
-    // 关键修复：解包可能嵌套的 data 层
-    let syncData = result.data;
-    if(syncData){
-      syncData = unwrapSyncData(syncData);
-      DB.merge(syncData);
-      DB.config.lastSyncVersion = result.version;
+    const exportText = JSON.stringify(exportData);
+    const cloudText = await cosRead();
+    if(cloudText){
+      // 合并：拉取云端 → 本地合并 → 上传
+      let cloudData = JSON.parse(cloudText);
+      cloudData = unwrapSyncData(cloudData);
+      DB.merge(cloudData);
+      const mergedData = DB.export();
+      await cosWrite(JSON.stringify(mergedData));
+      DB.config.lastSyncVersion = Date.now();
       DB.saveConfig();
       refreshCurrentView();
+      lastSyncResult = { time: new Date().toLocaleTimeString(), ok: true };
+      if(showToast) toast('✅ 同步成功');
+    } else {
+      // 首次同步：上传本地数据到云端
+      await cosWrite(exportText);
+      DB.config.lastSyncVersion = Date.now();
+      DB.saveConfig();
+      lastSyncResult = { time: new Date().toLocaleTimeString(), ok: true };
+      if(showToast) toast('✅ 首次同步，数据已上传到云端');
     }
-
-    // 记录同步诊断信息
-    const localCounts = {};
-    for(const t of ['teachers','students','lessons','sessions','supervisions']){
-      localCounts[t] = Object.keys(DB.data[t]||{}).filter(id=>!DB.data[t][id]._deleted).length;
-    }
-    lastSyncResult = {
-      time: new Date().toLocaleTimeString(),
-      ok: true,
-      version: result.version,
-      workerVersion: result.workerVersion || 'unknown(旧版!)',
-      mergedChanges: result.mergedChanges || 0,
-      localCounts,
-    };
-
-    if(showToast) toast(result.mergedChanges>0?`✅ 同步成功,合并${result.mergedChanges}条`:'✅ 已是最新');
-    return; // 成功
   }catch(e){
-    // 抛出错误由外层重试逻辑统一处理（包括 toast）
-    throw e;
+    lastSyncResult = { time: new Date().toLocaleTimeString(), ok:false, error: e.message||'unknown' };
+    if(showToast){
+      const msg = e.message||'';
+      if(msg.includes('Failed to fetch') || msg.includes('Load failed')){
+        toast('❌ 无法连接COS，检查配置或网络');
+      } else if(msg.includes('403')){
+        toast('❌ COS权限不足，检查子账号权限或CORS设置');
+      } else {
+        toast('❌ 同步失败: '+msg);
+      }
+    }
   }finally{
     syncing=false;
     setSyncInd(false);
   }
 }
 
-// 重置云端同步数据（清除损坏的嵌套数据后重新同步）
+// 重置云端同步数据（覆盖为空后重新上传）
 async function resetCloudSync(){
-  if(!DB.config.workerUrl){ toast('请先填写Worker地址'); return; }
+  if(!isCosConfigured()){ toast('请先填写腾讯云COS配置'); return; }
   if(!confirm('这将清空云端所有同步数据，然后把你当前设备的数据重新上传。\n\n其他设备需要重新同步才能获取数据。\n\n确定继续？')) return;
   try{
     toast('正在重置云端数据...');
-    const resp = await fetchWithTimeout(DB.config.workerUrl+'/reset', { method:'POST', headers:{'Content-Type':'application/json'} }, 10000);
-    if(!resp.ok){ throw new Error('HTTP '+resp.status); }
-    const result = await resp.json();
-    if(result.ok){
-      DB.config.lastSyncVersion = 0;
-      DB.saveConfig();
-      toast('云端数据已清空，正在重新上传...');
-      setTimeout(()=>doCloudSync(true), 500);
-    } else {
-      throw new Error(result.error || 'reset failed');
-    }
+    const exportText = JSON.stringify(DB.export());
+    await cosWrite(exportText);
+    DB.config.lastSyncVersion = Date.now();
+    DB.saveConfig();
+    toast('✅ 云端数据已重置，当前数据已上传');
+    refreshCurrentView();
   }catch(e){
     toast('❌ 重置失败: '+e.message);
   }
 }
 
-// 检查 Worker 版本（诊断用）
-async function checkWorkerVersion(){
-  if(!DB.config.workerUrl){ toast('请先填写Worker地址'); return; }
+// 检查 COS 连接（诊断用）
+async function checkCos(){
+  if(!isCosConfigured()){ toast('请先填写腾讯云COS配置'); return; }
   toast('🔍 正在检查...');
   try{
-    const resp = await fetchWithTimeout(DB.config.workerUrl+'/api/health', {}, 10000);
-    const data = await resp.json();
-    const v = data.version || '';
-    if(v === '2.0.0' || v === '2.1.0' || v === '2.2.0'){
-      toast(`✅ Worker版本: v${v}, D1: ${data.d1?'正常':'异常'}, 记录数: ${data.recordCount||0}`);
+    const status = await cosHead();
+    if(status === 200){
+      toast('✅ COS连接正常，云端已有同步数据');
+    } else if(status === 404){
+      toast('✅ COS连接正常，云端暂无数据（点立即同步上传）');
+    } else if(status === 403){
+      toast('❌ COS权限不足，检查子账号密钥或CORS设置');
     } else {
-      toast(`⚠️ Worker版本: ${v||'未知(旧版)'}, 需要更新Worker代码！`);
+      toast('❌ 连接异常: HTTP '+status);
     }
   }catch(e){
-    toast('❌ 无法连接Worker: '+e.message);
+    toast('❌ 无法连接COS: '+e.message+'。检查Bucket名、地域、密钥是否正确');
   }
 }
 
-// 仅拉取云端数据，完全覆盖本地（新用户首次同步用）
+// 仅拉取云端数据，完全覆盖本地（新设备首次同步用）
 async function pullCloudOnly(){
-  if(!DB.config.workerUrl){ toast('请先填写Worker地址'); return; }
+  if(!isCosConfigured()){ toast('请先填写腾讯云COS配置'); return; }
   if(!confirm('这将用云端数据完全替换你本地所有数据。\n\n适合新设备首次使用：直接拉取云端全部数据。\n\n确定继续？')) return;
   if(syncing){ toast('⏳ 正在同步中，请稍候...'); return; }
   syncing = true;
   setSyncInd(true);
-  toast('📥 正在拉取云端数据（GET 轻量模式）...');
-  let lastErr = null;
+  toast('📥 正在拉取云端数据...');
   try{
-    // 优先用 GET /pull（无 CORS 预检，最轻量），失败再降级 POST /sync
-    for(let attempt=0; attempt<2; attempt++){
-      try{
-        let resp, result;
-        if(attempt===0){
-          // 第一次：GET /pull（简单请求，无预检）
-          resp = await fetchWithTimeout(DB.config.workerUrl+'/pull', { method:'GET' }, 30000);
-        } else {
-          // 降级：POST /sync 发空数据
-          const emptyLocal = { teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, settings:{} };
-          resp = await fetchWithTimeout(DB.config.workerUrl+'/sync', {
-            method:'POST',
-            headers:{'Content-Type':'application/json','X-Client-Id':DB.config.clientId},
-            body: JSON.stringify({ local: emptyLocal, clientId: DB.config.clientId, lastVersion: 0 })
-          }, 30000);
-        }
-        if(!resp.ok) throw new Error('HTTP '+resp.status);
-        result = await resp.json();
-        if(result.data){
-          let syncData = unwrapSyncData(result.data);
-          // 直接替换本地数据
-          DB.data = { _updatedAt:now(), _version:0, currentTeacherId:null,
-            teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, settings:{} };
-          for(const table of ['teachers','students','lessons','sessions','supervisions','settings']){
-            if(syncData[table]){
-              for(const id in syncData[table]){
-                if(!syncData[table][id]._deleted){
-                  DB.data[table][id] = syncData[table][id];
-                }
-              }
+    const cloudText = await cosRead();
+    if(cloudText){
+      let syncData = JSON.parse(cloudText);
+      syncData = unwrapSyncData(syncData);
+      DB.data = { _updatedAt:now(), _version:0, currentTeacherId:null,
+        teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, settings:{} };
+      for(const table of ['teachers','students','lessons','sessions','supervisions','settings']){
+        if(syncData[table]){
+          for(const id in syncData[table]){
+            if(!syncData[table][id]._deleted){
+              DB.data[table][id] = syncData[table][id];
             }
           }
-          DB.config.lastSyncVersion = result.version;
-          DB.saveConfig();
-          DB.save();
-          refreshCurrentView();
-          const counts = {};
-          for(const t of ['teachers','students','lessons','sessions','supervisions']){
-            counts[t] = Object.keys(DB.data[t]).length;
-          }
-          toast(`✅ 拉取成功: 老师${counts.teachers} 学生${counts.students} 课次${counts.lessons} 上课${counts.sessions} 打卡${counts.supervisions}`);
-          return;
-        } else {
-          toast('云端没有数据');
-          return;
-        }
-      }catch(e){
-        lastErr = e;
-        if(attempt===0){
-          toast('⚠️ GET 拉取失败，尝试 POST 模式...');
-          await new Promise(r=>setTimeout(r, 800));
         }
       }
+      DB.config.lastSyncVersion = Date.now();
+      DB.saveConfig();
+      DB.save();
+      refreshCurrentView();
+      const counts = {};
+      for(const t of ['teachers','students','lessons','sessions','supervisions']){
+        counts[t] = Object.keys(DB.data[t]).length;
+      }
+      toast(`✅ 拉取成功: 老师${counts.teachers} 学生${counts.students} 课次${counts.lessons} 上课${counts.sessions} 打卡${counts.supervisions}`);
+    } else {
+      toast('云端没有数据，请先在有数据的设备上同步');
     }
-    // 两次都失败
-    toast('❌ 拉取失败: '+(lastErr?.message||'unknown')+'。建议先用「检查Worker」测试连通性');
+  }catch(e){
+    toast('❌ 拉取失败: '+e.message);
   }finally{
     syncing = false;
     setSyncInd(false);
@@ -966,15 +952,15 @@ async function pullCloudOnly(){
 
 function setSyncInd(on){
   const ind = $('#sync-ind');
-  const hasCloud = DB.config && DB.config.workerUrl;
+  const hasCloud = isCosConfigured();
   const hasFree = DB.config && DB.config.freeSyncOn && DB.config.freeSyncBlobId;
   ind.style.display = (hasCloud || hasFree) ? 'flex' : 'none';
   if(on){ $('#sync-text').textContent='同步中'; $('#sync-dot').style.color='#fde047'; }
   else if(hasCloud || hasFree){ $('#sync-text').textContent='已同步'; $('#sync-dot').style.color='#86efac'; }
 }
 
-setInterval(()=>{ if(DB.config && DB.config.workerUrl && DB.config.autoSync && !syncing) doCloudSync(false); }, 30000);
-document.addEventListener('visibilitychange',()=>{ if(!document.hidden && DB.config && DB.config.workerUrl) doCloudSync(false); });
+setInterval(()=>{ if(DB.config && isCosConfigured() && DB.config.autoSync && !syncing) doCloudSync(false); }, 30000);
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden && DB.config && isCosConfigured()) doCloudSync(false); });
 
 /* ==================== 跨标签页自动同步 (零配置) ==================== */
 let syncBC = null;
@@ -1064,7 +1050,7 @@ async function doFreeSync(showToast=false){
   }catch(e){
     if(showToast){
       if(isSyncNetworkError(e)){
-        toast('❌ 同步失败：网络受限。建议改用 Cloudflare Worker 方式，更稳定');
+        toast('❌ 同步失败：网络受限。建议改用腾讯云COS方式，国内直连更稳定');
       } else {
         toast('同步失败: '+e.message);
       }
@@ -1110,7 +1096,7 @@ async function enableFreeSync(){
   }catch(e){
     setSyncInd(false);
     if(isSyncNetworkError(e)){
-      throw new Error('网络受限，jsonblob.com 在当前网络下无法访问。建议改用 Cloudflare Worker 方式');
+      throw new Error('网络受限，jsonblob.com 在当前网络下无法访问。建议改用腾讯云COS方式');
     }
     throw e;
   }
@@ -1143,7 +1129,7 @@ async function joinFreeSync(blobId){
   }catch(e){
     setSyncInd(false);
     if(isSyncNetworkError(e)){
-      throw new Error('网络受限，无法连接 jsonblob.com。建议改用 Cloudflare Worker 方式');
+      throw new Error('网络受限，无法连接 jsonblob.com。建议改用腾讯云COS方式');
     }
     throw e;
   }
@@ -4605,7 +4591,7 @@ function renderMine(){
   $('#mine-teacher').innerHTML=t&&!t._deleted?`<div style="display:flex;align-items:center;gap:10px"><span class="t-av" style="background:${teacherColor(t.id)};width:34px;height:34px;font-size:13px">${teacherInitial(t.name)}</span><div><div style="font-weight:600">${t.name}</div><div style="font-size:11px;color:var(--text3)">${t.phone||'无电话'}</div></div></div><div style="margin-top:8px"><button class="btn btn-sm btn-ghost" onclick="switchTeacher()">切换老师</button></div>`:`<div style="color:var(--text3)">未设置当前老师</div><button class="btn btn-sm btn-ghost" onclick="switchTeacher()" style="margin-top:6px">设置</button>`;
   const cfg=DB.config;
   const freeOn = cfg.freeSyncOn && cfg.freeSyncBlobId;
-  const cloudOn = !!cfg.workerUrl;
+  const cloudOn = isCosConfigured();
   const anySync = freeOn || cloudOn;
   $('#sync-config').innerHTML=`
     <div class="sync-status ${anySync?'on':'off'}" style="margin-bottom:8px"><span class="dot"></span>${anySync?'自动同步已启用':'未启用同步'}</div>
@@ -4618,25 +4604,27 @@ function renderMine(){
     ${!freeOn?`<button class="btn btn-primary btn-block" onclick="enableFreeSyncUI()" style="margin-bottom:6px">☁️ 一键开启自动同步</button>`:`<button class="btn btn-ghost btn-block" onclick="doFreeSync(true)" style="margin-bottom:6px">🔄 立即同步</button><button class="btn btn-danger btn-block" onclick="disableFreeSyncUI()" style="margin-bottom:6px">关闭自动同步</button>`}
     ${!freeOn?`<button class="btn btn-ghost btn-block" onclick="joinFreeSyncUI()" style="margin-bottom:6px">📥 输入同步码加入</button>`:''}
     ${!freeOn?`<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:11px;color:#92400e;line-height:1.6">
-      ⚠️ 国内网络下"一键开启"可能失败（jsonblob.com 受限）。推荐用 Cloudflare Worker 方式，稳定且免费，详见仓库里的 SYNC_WORKER_README.md
+      ⚠️ "一键开启"走 jsonblob.com，国内网络可能失败。推荐用下方腾讯云COS方式（国内直连，稳定）。
     </div>`:''}
     <div style="border-top:1px solid var(--border);margin:8px 0;padding-top:8px">
-      <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px">高级：自建 Cloudflare Worker（推荐，最稳定）</div>
-      <div class="form-row" style="margin-bottom:4px"><input class="form-control" id="cfg-url" value="${cfg.workerUrl}" placeholder="https://xxx.workers.dev" style="font-size:11px"></div>
+      <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px">☁️ 腾讯云COS 同步（国内直连，推荐）</div>
+      <div style="font-size:10px;color:var(--text3);margin-bottom:4px;line-height:1.5">在腾讯云创建COS存储桶+子账号密钥，填入以下四个值：</div>
+      <div class="form-row" style="margin-bottom:4px"><input class="form-control" id="cfg-cos-bucket" value="${cfg.cosBucket||''}" placeholder="存储桶名 (如 teach-sync-1234567890)" style="font-size:11px"></div>
+      <div class="form-row" style="margin-bottom:4px"><input class="form-control" id="cfg-cos-region" value="${cfg.cosRegion||''}" placeholder="地域 (如 ap-guangzhou)" style="font-size:11px"></div>
+      <div class="form-row" style="margin-bottom:4px"><input class="form-control" id="cfg-cos-secretid" value="${cfg.cosSecretId||''}" placeholder="SecretId" style="font-size:11px"></div>
+      <div class="form-row" style="margin-bottom:4px"><input class="form-control" id="cfg-cos-secretkey" value="${cfg.cosSecretKey||''}" placeholder="SecretKey" style="font-size:11px"></div>
       <div style="display:flex;gap:4px;margin-bottom:4px">
         <button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="saveSyncConfig()">💾 保存配置</button>
-        <button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="checkWorkerVersion()">🔍 检查Worker</button>
+        <button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="checkCos()">🔍 检查连接</button>
         <button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="doCloudSync(true)">🔄 立即同步</button>
       </div>
-      <button class="btn btn-danger btn-block" onclick="resetCloudSync()" style="font-size:11px;margin-bottom:4px">⚠️ 重置云端数据（修复同步问题）</button>
+      <button class="btn btn-danger btn-block" onclick="resetCloudSync()" style="font-size:11px;margin-bottom:4px">⚠️ 重置云端数据</button>
       <button class="btn btn-primary btn-block" onclick="pullCloudOnly()" style="font-size:11px;margin-bottom:4px">📥 仅拉取云端（覆盖本地，新设备用）</button>
-      <div style="font-size:10px;color:var(--text3);margin-top:4px;line-height:1.5">💡 如果多设备数据不同步，点「检查Worker」确认版本是v2.0.0，如果不是需要重新部署Worker代码。仍不行点「重置云端数据」。</div>
     </div>
     <div style="font-size:10px;color:var(--text3);margin-top:8px;line-height:1.6">
       💡 同步说明：<br>
       • 同一浏览器多标签页 → 自动同步，零配置<br>
-      • 跨设备 → 推荐 Cloudflare Worker 方式（免费稳定）<br>
-      • "一键开启"走 jsonblob.com，国内网络可能失败<br>
+      • 跨设备 → 腾讯云COS同步（国内直连，稳定）<br>
       • 每30秒自动同步一次，编辑后2秒自动上传
     </div>
   `;
@@ -4716,12 +4704,15 @@ function renderMine(){
 }
 
 function saveSyncConfig(){
-  DB.config.workerUrl=$('#cfg-url')?.value.trim().replace(/\/$/,'') || '';
+  DB.config.cosBucket=$('#cfg-cos-bucket')?.value.trim() || '';
+  DB.config.cosRegion=$('#cfg-cos-region')?.value.trim() || '';
+  DB.config.cosSecretId=$('#cfg-cos-secretid')?.value.trim() || '';
+  DB.config.cosSecretKey=$('#cfg-cos-secretkey')?.value.trim() || '';
   DB.config.autoSync=$('#cfg-auto')?.checked ?? true;
   DB.saveConfig();
   toast('已保存同步配置');
   setSyncInd(false);
-  if(DB.config.workerUrl) doCloudSync(true);
+  if(isCosConfigured()) doCloudSync(true);
 }
 
 async function enableFreeSyncUI(){
@@ -5054,7 +5045,7 @@ function doMergeDuplicateStudents(){
 function openSync(){
   const cfg=DB.config;
   const freeOn = cfg.freeSyncOn && cfg.freeSyncBlobId;
-  const cloudOn = !!cfg.workerUrl;
+  const cloudOn = isCosConfigured();
   const anySync = freeOn || cloudOn;
   const html=`
     <div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.6">${anySync?'✅ 自动同步已启用，数据自动实时同步':'⚠️ 未启用同步，同一浏览器多标签页已自动同步，跨设备需开启云端同步'}</div>
@@ -5421,7 +5412,7 @@ function resetData(){
   localStorage.removeItem(DB.CONFIG_KEY);
   // 重置内存数据为空种子
   DB.data = DB._seed();
-  DB.config = { workerUrl:'https://teach-worker.578874944.workers.dev', clientId:uid(), lastSyncVersion:0, autoSync:true, freeSyncKey:'', freeSyncBlobId:'', freeSyncOn:false };
+  DB.config = { cosBucket:'', cosRegion:'', cosSecretId:'', cosSecretKey:'', clientId:uid(), lastSyncVersion:0, autoSync:true, freeSyncKey:'', freeSyncBlobId:'', freeSyncOn:false };
   DB.save();
   DB.saveConfig();
   closeModal(); switchTab('mine'); renderMine();
@@ -5466,7 +5457,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v7';
+    const sw=`const C='tw-cache-v9';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
