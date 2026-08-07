@@ -542,7 +542,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.20.5';
+const APP_VERSION = 'v3.20.6';
 const APP_VERSION_DATE = '2026-08-07';
 
 const $ = s => document.querySelector(s);
@@ -2984,17 +2984,24 @@ function updateSvExportPreview(){
   // 按学生统计
   const studentMap={};
   list.forEach(s=>{
-    if(!studentMap[s.studentId]) studentMap[s.studentId]={sid:s.studentId, records:[], days:new Set(), subjects:new Set(), vocab:0, spell:0, listenDays:new Set(), speakDays:new Set(), ckDays:new Set()};
-    studentMap[s.studentId].records.push(s);
-    studentMap[s.studentId].days.add(s.date);
-    studentMap[s.studentId].subjects.add(s.subject||'未分类');
+    if(!studentMap[s.studentId]) studentMap[s.studentId]={sid:s.studentId, records:[], days:new Set(), subjects:new Set(), subjectTypes:{}, vocab:0, spell:0, listenDays:new Set(), speakDays:new Set(), ckDays:new Set()};
+    const stEntry=studentMap[s.studentId];
+    stEntry.records.push(s);
+    stEntry.days.add(s.date);
+    const baseSubject=s.subject||'未分类';
+    stEntry.subjects.add(baseSubject);
+    if(!stEntry.subjectTypes[baseSubject]) stEntry.subjectTypes[baseSubject]=new Set();
+    if((s.vocab||0)>0) stEntry.subjectTypes[baseSubject].add('单词');
+    if((s.spell||0)>0) stEntry.subjectTypes[baseSubject].add('拼写');
+    if(s.listening) stEntry.subjectTypes[baseSubject].add('听力');
+    if(s.speaking) stEntry.subjectTypes[baseSubject].add('口语');
     // 累计打卡数据
     const v=s.vocab||0, sp=s.spell||0, li=!!s.listening, spk=!!s.speaking;
-    studentMap[s.studentId].vocab+=v;
-    studentMap[s.studentId].spell+=sp;
-    if(li) studentMap[s.studentId].listenDays.add(s.date);
-    if(spk) studentMap[s.studentId].speakDays.add(s.date);
-    if(v>0||sp>0||li||spk) studentMap[s.studentId].ckDays.add(s.date);
+    stEntry.vocab+=v;
+    stEntry.spell+=sp;
+    if(li) stEntry.listenDays.add(s.date);
+    if(spk) stEntry.speakDays.add(s.date);
+    if(v>0||sp>0||li||spk) stEntry.ckDays.add(s.date);
   });
   const students=Object.values(studentMap).map(st=>{
     const stu=DB.data.students[st.sid];
@@ -3063,7 +3070,11 @@ function updateSvExportPreview(){
           <th style="text-align:left;padding:6px 8px;border:1px solid #e5e7eb">科目</th>
         </tr></thead><tbody>`;
       students.forEach((st,i)=>{
-        const subjList=[...st.subjects].join(', ');
+        const subjList=[...st.subjects].map(base=>{
+          const types=st.subjectTypes[base];
+          if(types && types.size>0) return `${base}（${[...types].join('，')}）`;
+          return base;
+        }).join('，');
         html+=`<tr style="${i%2?'background:#fafbfc':''}">
           <td style="padding:5px 8px;border:1px solid #e5e7eb;font-weight:600">${st.name}${st.grade?'<span style="color:#999;font-weight:400;margin-left:4px">'+st.grade+'</span>':''}</td>
           <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;font-weight:700;color:#4f46e5">${st.days.size}</td>
@@ -6854,7 +6865,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v20';
+    const sw=`const C='tw-cache-v21';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
