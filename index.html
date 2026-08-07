@@ -162,11 +162,11 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;display:none;align-items:flex-end;justify-content:center}
 .modal.show{display:flex;animation:fadein .2s}
 @keyframes fadein{from{opacity:0}to{opacity:1}}
-.sheet{background:var(--card);width:100%;max-width:600px;max-height:92vh;border-radius:16px 16px 0 0;display:flex;flex-direction:column;padding-bottom:var(--safe-b);animation:slideup .25s}
+.sheet{background:var(--card);width:100%;max-width:600px;max-height:calc(100vh - env(safe-area-inset-top,0px) - 12px);border-radius:16px 16px 0 0;display:flex;flex-direction:column;padding-bottom:var(--safe-b);animation:slideup .25s}
 @keyframes slideup{from{transform:translateY(100%)}to{transform:translateY(0)}}
-.sheet-h{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid var(--border);flex-shrink:0}
-.sheet-h h3{font-size:15px;font-weight:600}
-.sheet-h .close{font-size:22px;color:var(--text3);width:30px;height:30px;display:flex;align-items:center;justify-content:center}
+.sheet-h{display:flex;align-items:center;justify-content:space-between;padding:calc(13px + env(safe-area-inset-top,0px)) 15px 13px;border-bottom:1px solid var(--border);flex-shrink:0}
+.sheet-h h3{font-size:15px;font-weight:600;margin:0}
+.sheet-h .close{font-size:26px;color:var(--text3);width:36px;height:36px;display:flex;align-items:center;justify-content:center;flex-shrink:0;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 .sheet-body{flex:1;overflow-y:auto;padding:14px}
 .sheet-f{padding:10px 14px;border-top:1px solid var(--border);flex-shrink:0;display:flex;gap:7px}
 
@@ -281,7 +281,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
 .day-timeline .dt-slot{display:flex;border-bottom:1px solid var(--border);min-height:56px;position:relative}
 .day-timeline .dt-slot .dt-hm{width:52px;flex-shrink:0;text-align:right;padding:6px 8px 0 0;font-size:11px;color:var(--text3);font-variant-numeric:tabular-nums}
 .day-timeline .dt-slot .dt-body{flex:1;padding:0;position:relative;border-left:1px solid var(--border)}
-.day-timeline .dt-event{position:absolute;background:var(--card);border-radius:8px;padding:8px 32px 8px 10px;border-left:3px solid var(--primary);box-shadow:0 1px 3px rgba(0,0,0,.06);z-index:1;overflow:hidden}
+.day-timeline .dt-event{position:absolute;background:var(--card);border-radius:8px;padding:8px 34px 8px 10px;border-left:3px solid var(--primary);box-shadow:0 1px 3px rgba(0,0,0,.06);z-index:1;overflow:hidden;max-width:calc(100vw - 84px)}
 .day-timeline .dt-event .dt-title{font-size:13px;font-weight:600}
 .day-timeline .dt-event .dt-sub{font-size:11px;color:var(--text3);margin-top:2px}
 .day-timeline .dt-event .dt-time{font-size:11px;font-weight:500;color:var(--primary);margin-bottom:2px}
@@ -542,8 +542,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.20.3';
-const APP_VERSION_DATE = '2026-08-06';
+const APP_VERSION = 'v3.20.5';
+const APP_VERSION_DATE = '2026-08-07';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -1628,6 +1628,19 @@ function getWeekDates(offset){
   return {dates, monthLabel};
 }
 
+// 将一条督学记录按打卡类型拆分成多个"科目+打卡类型"名称
+// 如 subject=英语, vocab>0, speaking=true → ['英语单词','英语口语']
+function getSubjectCkNames(record){
+  const subj=record.subject||'未分类';
+  const types=[];
+  if((record.vocab||0)>0) types.push('单词');
+  if((record.spell||0)>0) types.push('拼写');
+  if(record.listening) types.push('听力');
+  if(record.speaking) types.push('口语');
+  if(types.length===0) return [subj];
+  return types.map(t=>subj+t);
+}
+
 function getSvSubjects(){
   const set=new Set();
   Object.values(DB.data.lessons).filter(l=>!l._deleted).forEach(l=>{ if(l.title) set.add(normalizeSubject(l.title)); });
@@ -2394,6 +2407,7 @@ function renderSupervisionPeople(list){
         <span style="color:var(--text2)">📝 共 <b style="color:${color}">${st.totalCount}</b>次</span>
         ${st.streak>0?`<span style="color:var(--amber)">🔥 连续 <b>${st.streak}</b>天</span>`:''}
       </div>
+      ${(()=>{const c=st.allRecords.reduce((a,r)=>{a.vocab+=r.vocab||0;a.spell+=r.spell||0;if(r.listening)a.listenDays++;if(r.speaking)a.speakDays++;return a;},{vocab:0,spell:0,listenDays:0,speakDays:0});const tags=[];if(c.vocab>0)tags.push('<span style="background:#4f46e515;color:#4f46e5;border-radius:8px;padding:1px 5px;font-size:9px">🔤'+c.vocab+'</span>');if(c.spell>0)tags.push('<span style="background:#05966915;color:#059669;border-radius:8px;padding:1px 5px;font-size:9px">✍️'+c.spell+'</span>');if(c.listenDays>0)tags.push('<span style="background:#d9770615;color:#d97706;border-radius:8px;padding:1px 5px;font-size:9px">👂'+c.listenDays+'天</span>');if(c.speakDays>0)tags.push('<span style="background:#dc262615;color:#dc2626;border-radius:8px;padding:1px 5px;font-size:9px">🗣️'+c.speakDays+'天</span>');return tags.length?'<div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap">'+tags.join('')+'</div>':'';})()}
     </div>`;
   });
   cont.innerHTML=html;
@@ -2474,9 +2488,16 @@ function showSvPersonDetail(studentId){
   // 时间分布
   const ts={morning:0,afternoon:0,evening:0,unknown:0};
   allRecords.forEach(s=>{ if(!s.time){ts.unknown++;return;} const h=parseInt(s.time.split(':')[0]); if(h<12)ts.morning++;else if(h<18)ts.afternoon++;else ts.evening++; });
-  // 科目分布
+  // 科目分布（含打卡类型子项）
   const subjMap={};
-  allRecords.forEach(s=>{ const k=s.subject||'未分类'; if(!subjMap[k])subjMap[k]={count:0,days:new Set()}; subjMap[k].count++; subjMap[k].days.add(s.date); });
+  allRecords.forEach(s=>{
+    const names=getSubjectCkNames(s);
+    names.forEach(name=>{
+      if(!subjMap[name])subjMap[name]={count:0,days:new Set()};
+      subjMap[name].count++;
+      subjMap[name].days.add(s.date);
+    });
+  });
   const subjStats=Object.entries(subjMap).map(([name,v])=>({name,count:v.count,days:v.days.size})).sort((a,b)=>b.count-a.count);
   // 星期分布
   const dowCount=[0,0,0,0,0,0,0];
@@ -2984,7 +3005,13 @@ function updateSvExportPreview(){
   const totalStudents=students.length;
   // 按科目统计
   const subjMap={};
-  list.forEach(s=>{ const k=s.subject||'未分类'; if(!subjMap[k]) subjMap[k]={name:k,count:0,days:new Set(),students:new Set()}; subjMap[k].count++; subjMap[k].days.add(s.date); subjMap[k].students.add(s.studentId); });
+  list.forEach(s=>{
+    const names=getSubjectCkNames(s);
+    names.forEach(name=>{
+      if(!subjMap[name]) subjMap[name]={name,count:0,days:new Set(),students:new Set()};
+      subjMap[name].count++; subjMap[name].days.add(s.date); subjMap[name].students.add(s.studentId);
+    });
+  });
   const subjStats=Object.values(subjMap).sort((a,b)=>b.count-a.count);
 
   let html=`<div id="sv-report-content" style="background:#fff;color:#1a1a1a;padding:16px;border-radius:10px;font-family:system-ui,sans-serif">
@@ -3321,12 +3348,47 @@ function doSvExport(){
   }
 }
 function doSvExportCapture(el,filename){
-  html2canvas(el,{scale:2,backgroundColor:'#ffffff',useCORS:true}).then(canvas=>{
+  // 临时解除所有父级 overflow 限制，避免被 modal 滚动裁断
+  const restoreList=[];
+  let p=el.parentElement;
+  while(p && p!==document.body){
+    const cs=getComputedStyle(p);
+    const oy=cs.overflowY, ov=cs.overflow;
+    if(oy==='auto'||oy==='hidden'||oy==='scroll'||ov==='auto'||ov==='hidden'||ov==='scroll'){
+      restoreList.push({el:p,ov:ov,ovy:oy});
+      p.style.overflow='visible';
+      p.style.overflowY='visible';
+    }
+    p=p.parentElement;
+  }
+  const scrollBackX=window.scrollX, scrollBackY=window.scrollY;
+  window.scrollTo(0,0);
+  html2canvas(el,{
+    scale:1.75,
+    backgroundColor:'#ffffff',
+    useCORS:true,
+    width:el.scrollWidth,
+    height:el.scrollHeight,
+    windowWidth:el.scrollWidth,
+    windowHeight:el.scrollHeight,
+    scrollX:0,
+    scrollY:0,
+    onclone:(doc)=>{
+      const cloned=doc.getElementById('sv-report-content');
+      if(cloned){cloned.style.maxHeight='none';cloned.style.overflow='visible';}
+    }
+  }).then(canvas=>{
+    restoreList.forEach(r=>{r.el.style.overflow=r.ov;r.el.style.overflowY=r.ovy;});
+    window.scrollTo(scrollBackX,scrollBackY);
     canvas.toBlob(blob=>{
       downloadBlob(blob,filename);
       toast('✅ 图片已保存');
     },'image/png');
-  }).catch(err=>{ toast('生成失败: '+err.message); });
+  }).catch(err=>{
+    restoreList.forEach(r=>{r.el.style.overflow=r.ov;r.el.style.overflowY=r.ovy;});
+    window.scrollTo(scrollBackX,scrollBackY);
+    toast('生成失败: '+err.message);
+  });
 }
 
 /* ---- 个人详情报告导出 ---- */
@@ -3355,7 +3417,13 @@ function exportSvPersonReport(studentId){
   const ts={morning:0,afternoon:0,evening:0,unknown:0};
   allRecords.forEach(s=>{ if(!s.time){ts.unknown++;return;} const h=parseInt(s.time.split(':')[0]); if(h<12)ts.morning++;else if(h<18)ts.afternoon++;else ts.evening++; });
   const subjMap={};
-  allRecords.forEach(s=>{ const k=s.subject||'未分类'; if(!subjMap[k])subjMap[k]={count:0,days:new Set()}; subjMap[k].count++; subjMap[k].days.add(s.date); });
+  allRecords.forEach(s=>{
+    const names=getSubjectCkNames(s);
+    names.forEach(name=>{
+      if(!subjMap[name])subjMap[name]={count:0,days:new Set()};
+      subjMap[name].count++; subjMap[name].days.add(s.date);
+    });
+  });
   const subjStats=Object.entries(subjMap).map(([name,v])=>({name,count:v.count,days:v.days.size})).sort((a,b)=>b.count-a.count);
   const dowCount=[0,0,0,0,0,0,0];
   allRecords.forEach(s=>{ dowCount[dayOfWeek(s.date)]++; });
@@ -3482,7 +3550,30 @@ function exportSvPersonReport(studentId){
   const el=holder.querySelector('#sv-person-report');
   toast('正在生成个人报告图片...');
   const filename=`督学报告_${stuName}_个人详情_${today}.png`;
-  const doCapture=()=>{ html2canvas(el,{scale:2,backgroundColor:'#ffffff',useCORS:true}).then(canvas=>{ canvas.toBlob(blob=>{ downloadBlob(blob,filename); toast('✅ '+stuName+'的个人报告已保存'); holder.remove(); },'image/png'); }).catch(err=>{ toast('生成失败: '+err.message); holder.remove(); }); };
+  const doCapture=()=>{ const restoreList2=[]; let p2=el.parentElement;
+    while(p2 && p2!==document.body){
+      const cs2=getComputedStyle(p2);
+      const oy2=cs2.overflowY,ov2=cs2.overflow;
+      if(oy2==='auto'||oy2==='hidden'||oy2==='scroll'||ov2==='auto'||ov2==='hidden'||ov2==='scroll'){
+        restoreList2.push({el:p2,ov:ov2,ovy:oy2});
+        p2.style.overflow='visible';p2.style.overflowY='visible';
+      }
+      p2=p2.parentElement;
+    }
+    html2canvas(el,{
+      scale:1.75,backgroundColor:'#ffffff',useCORS:true,
+      width:el.scrollWidth,height:el.scrollHeight,
+      windowWidth:el.scrollWidth,windowHeight:el.scrollHeight,
+      scrollX:0,scrollY:0,
+      onclone:(doc)=>{const c=doc.getElementById('sv-person-report');if(c){c.style.maxHeight='none';c.style.overflow='visible';}}
+    }).then(canvas=>{
+      restoreList2.forEach(r=>{r.el.style.overflow=r.ov;r.el.style.overflowY=r.ovy;});
+      canvas.toBlob(blob=>{ downloadBlob(blob,filename); toast('✅ '+stuName+'的个人报告已保存'); holder.remove(); },'image/png');
+    }).catch(err=>{
+      restoreList2.forEach(r=>{r.el.style.overflow=r.ov;r.el.style.overflowY=r.ovy;});
+      toast('生成失败: '+err.message); holder.remove();
+    });
+  };
   if(typeof html2canvas==='undefined'){
     const script=document.createElement('script');
     script.src='https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
@@ -4195,15 +4286,16 @@ function renderDayView(lessons){
     const top = ((ev.startMin - startH*60) / 60) * slotHeight;
     const height = Math.max(28, ((ev.endMin - ev.startMin) / 60) * slotHeight - 2);
     // 水平分布
-    let leftPct, widthPct;
+    let dtPos;
     if(ev.overlapTotal>1){
-      widthPct = 100/ev.overlapTotal - 1;
-      leftPct = ev.overlapIndex * (100/ev.overlapTotal);
+      const widthPct = 100/ev.overlapTotal - 1;
+      const leftPct = ev.overlapIndex * (100/ev.overlapTotal);
+      dtPos = `left:calc(52px + ${leftPct}% + 2px);width:calc(${widthPct}% - 6px)`;
     } else {
-      leftPct = 0;
-      widthPct = 100;
+      // 单一课程：自适应宽度，左对齐时间轴后 8px，右对齐 8px
+      dtPos = `left:calc(52px + 8px);right:8px`;
     }
-    html += `<div class="dt-event" style="top:${top}px;height:${height}px;left:calc(52px + ${leftPct}% + 2px);width:calc(${widthPct}% - 6px);border-left-color:${color}" onclick="openLessonDetail('${l.id}','${dateStr}')">
+    html += `<div class="dt-event" style="top:${top}px;height:${height}px;${dtPos};border-left-color:${color}" onclick="openLessonDetail('${l.id}','${dateStr}')">
       <div class="dt-time" style="color:${color}">${lessonTimeRange(l)}${subT?' <span style="color:var(--red)">代</span>':''}</div>
       <div class="dt-title">${l.title} <span style="font-size:10px;color:var(--text3);font-weight:400">[${courseTypeLabel(l.type)}]</span></div>
       ${height>60?`<div class="dt-sub">${ttModeFilter==='mine'?'':'👤 '+(t?.name||'-')+(subT?'→'+subT.name:'')+' · '}${stus?'🎓 '+stus:''}</div>`:''}
@@ -6762,7 +6854,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v18';
+    const sw=`const C='tw-cache-v20';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
