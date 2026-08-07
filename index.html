@@ -542,7 +542,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.20.7';
+const APP_VERSION = 'v3.20.8';
 const APP_VERSION_DATE = '2026-08-07';
 
 const $ = s => document.querySelector(s);
@@ -2485,10 +2485,7 @@ function showSvPersonDetail(studentId){
   // 周均
   const weeksSince=allDates.length>0?Math.max(1,Math.ceil((new Date(today+'T00:00:00')-new Date(allDates[0]+'T00:00:00'))/86400000/7)):1;
   const weeklyAvg=(totalDays/weeksSince).toFixed(1);
-  // 时间分布
-  const ts={morning:0,afternoon:0,evening:0,unknown:0};
-  allRecords.forEach(s=>{ if(!s.time){ts.unknown++;return;} const h=parseInt(s.time.split(':')[0]); if(h<12)ts.morning++;else if(h<18)ts.afternoon++;else ts.evening++; });
-  // 科目分布（含打卡类型子项）
+  // 科目分布（含打卡类型子项）— 仅用于头像颜色
   const subjMap={};
   allRecords.forEach(s=>{
     const names=getSubjectCkNames(s);
@@ -2499,28 +2496,21 @@ function showSvPersonDetail(studentId){
     });
   });
   const subjStats=Object.entries(subjMap).map(([name,v])=>({name,count:v.count,days:v.days.size})).sort((a,b)=>b.count-a.count);
-  // 星期分布
-  const dowCount=[0,0,0,0,0,0,0];
-  allRecords.forEach(s=>{ dowCount[dayOfWeek(s.date)]++; });
-  const dowLabels=['日','一','二','三','四','五','六'];
-  const maxDow=Math.max(1,...dowCount);
   // 头像颜色
   const avatarColor=subjStats.length>0?subjectColor(subjStats[0].name):'#4f46e5';
-  // 个人热力图（近3个月）
-  const heatEnd=new Date(today+'T00:00:00');
-  const heatStart=new Date(heatEnd); heatStart.setDate(heatStart.getDate()-91);
-  const sd=heatStart.getDay(); heatStart.setDate(heatStart.getDate()-(sd===0?6:sd-1));
-  const weeks=[];
-  let cur=new Date(heatStart);
-  while(cur<=heatEnd){
-    const week=[];
-    for(let i=0;i<7;i++){ const ds=fmtDate(cur); const c=allRecords.filter(s=>s.date===ds).length; week.push({date:ds,count:c,isToday:ds===today,isFuture:ds>today}); cur.setDate(cur.getDate()+1); }
-    weeks.push(week);
+  // 最近30天打卡日历（显示单词个数）
+  const calEnd=new Date(today+'T00:00:00');
+  const calStart=new Date(calEnd); calStart.setDate(calStart.getDate()-29);
+  const calDays=[];
+  for(let d=new Date(calStart); d<=calEnd; d.setDate(d.getDate()+1)){
+    const ds=fmtDate(d);
+    const recs=allRecords.filter(s=>s.date===ds);
+    const vocabCount=recs.reduce((sum,s)=>sum+(s.vocab||0),0);
+    calDays.push({date:ds,count:recs.length,vocab:vocabCount,isToday:ds===today});
   }
-  const heatColor=(c,fut)=>{ if(fut)return'#f9fafb'; if(c===0)return'#ebedf0'; if(c===1)return'#a7f3d0'; if(c<=3)return'#34d399'; if(c<=5)return'#059669'; return'#064e3b'; };
-  const mNames=['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
-  let mLabels='',lastM=-1;
-  weeks.forEach((w,i)=>{ const fd=new Date(w[0].date+'T00:00:00'); const m=fd.getMonth(); if(m!==lastM){mLabels+=`<text x="${i*13+8}" y="9" style="font-size:8px;fill:#999">${mNames[m]}</text>`;lastM=m;} });
+  const dowCN=['日','一','二','三','四','五','六'];
+  const calStartStr=calStart.toISOString().slice(5,10).replace('-','/');
+  const calEndStr=today.slice(5).replace('-','/');
 
   let html='';
   // 头部
@@ -2541,60 +2531,33 @@ function showSvPersonDetail(studentId){
     <div style="background:#f5f3ff;border-radius:8px;padding:8px 6px;text-align:center"><div style="font-size:18px;font-weight:700;color:#7c3aed">${monthDays}</div><div style="font-size:9px;color:#666">📊 本月天数</div></div>
     <div style="background:#fff7ed;border-radius:8px;padding:8px 6px;text-align:center"><div style="font-size:18px;font-weight:700;color:#ea580c">${weeklyAvg}</div><div style="font-size:9px;color:#666">📈 周均天数</div></div>
   </div>`;
-  // 个人热力图
+  // 最近30天打卡日历（显示单词个数）
   html+=`<div style="margin-bottom:14px">
-    <div style="font-size:12px;font-weight:600;margin-bottom:6px">🔥 个人打卡热力图（近3个月）</div>
-    <div style="overflow-x:auto"><svg width="${weeks.length*13+20}" height="105" style="font-family:system-ui,sans-serif">
-      <g>${mLabels}</g>`;
-  for(let i=0;i<7;i++){ if(i%2===1) html+=`<text x="0" y="${i*13+12}" style="font-size:7px;fill:#bbb">${dowLabels[i]}</text>`; }
-  weeks.forEach((w,wi)=>{ w.forEach((day,di)=>{ const x=wi*13+8,y=di*13+2; html+=`<rect x="${x}" y="${y}" width="11" height="11" rx="2" fill="${heatColor(day.count,day.isFuture)}" stroke="${day.isToday?'#ef4444':'#fff'}" stroke-width="${day.isToday?'1.5':'0.5'}"><title>${day.date}: ${day.count}次</title></rect>`; }); });
-  html+=`</svg></div>
-    <div style="display:flex;align-items:center;gap:3px;margin-top:4px;font-size:9px;color:#999">少 ${[0,1,3,5,6].map(v=>`<div style="width:9px;height:9px;border-radius:2px;background:${heatColor(v,false)}"></div>`).join('')} 多</div>
-  </div>`;
-  // 时间分布
-  const timeBars=[{label:'🌅 上午',count:ts.morning,color:'#fbbf24'},{label:'☀️ 下午',count:ts.afternoon,color:'#f59e0b'},{label:'🌙 晚上',count:ts.evening,color:'#6366f1'},{label:'❓ 未知',count:ts.unknown,color:'#d1d5db'}].filter(t=>t.count>0);
-  if(timeBars.length>0){
-    html+=`<div style="margin-bottom:14px"><div style="font-size:12px;font-weight:600;margin-bottom:6px">🕐 来访时间分布</div>`;
-    timeBars.forEach(t=>{ const pct=totalVisits>0?Math.round(t.count/totalVisits*100):0;
-      html+=`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:11px;min-width:52px">${t.label}</span><div style="flex:1;height:12px;background:#f3f4f6;border-radius:6px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${t.color};border-radius:6px"></div></div><span style="font-size:10px;color:#666;min-width:45px;text-align:right">${t.count}次(${pct}%)</span></div>`; });
-    html+=`</div>`;
-  }
-  // 科目分布
-  if(subjStats.length>0){
-    html+=`<div style="margin-bottom:14px"><div style="font-size:12px;font-weight:600;margin-bottom:6px">📚 科目分布</div>`;
-    subjStats.forEach(st=>{ const c=subjectColor(st.name); const pct=totalVisits>0?Math.round(st.count/totalVisits*100):0;
-      html+=`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="width:8px;height:8px;border-radius:50%;background:${c};flex-shrink:0"></span><span style="font-size:11px;min-width:50px">${st.name}</span><div style="flex:1;height:12px;background:#f3f4f6;border-radius:6px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${c};border-radius:6px"></div></div><span style="font-size:10px;color:#666;min-width:55px;text-align:right">${st.count}次·${st.days}天</span></div>`; });
-    html+=`</div>`;
-  }
-  // 星期分布
-  html+=`<div style="margin-bottom:14px"><div style="font-size:12px;font-weight:600;margin-bottom:6px">📆 星期分布</div><div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">`;
-  for(let i=1;i<=7;i++){ const dow=i%7; const count=dowCount[dow]; const h=Math.max(4,Math.round(count/maxDow*40)); const c=count>0?(subjStats.length>0?subjectColor(subjStats[0].name):'#4f46e5'):'#e5e7eb';
-    html+=`<div style="text-align:center"><div style="height:${h}px;background:${c};border-radius:2px;margin:0 auto 3px;width:70%"></div><div style="font-size:10px;font-weight:${count>0?'600':'400'};color:${count>0?'var(--text)':'var(--text3)'}">${count}</div><div style="font-size:8px;color:var(--text3)">${dowLabels[dow]}</div></div>`; }
-  html+=`</div></div>`;
-  // 最近记录（可展开折叠）
-  const initCount=Math.min(5,allRecords.length);
-  html+=`<div style="margin-bottom:8px" id="sv-recent-section">`;
-  html+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">`;
-  html+=`<span style="font-size:12px;font-weight:600">📝 最近记录（共${allRecords.length}条）</span>`;
-  if(allRecords.length>5){
-    html+=`<button class="btn btn-sm btn-ghost" id="sv-recent-btn" style="font-size:10px;padding:2px 8px" onclick="toggleSvRecent(${allRecords.length}, ${initCount})">展开全部</button>`;
-  }
-  html+=`</div>`;
-  allRecords.forEach((s,i)=>{
-    const c=subjectColor(s.subject||'未分类'); const isToday=s.date===today;
-    const hidden=i>=initCount?'display:none;':'';
-    html+=`<div class="sv-recent-item" style="${hidden}border-left:3px solid ${c};padding:6px 10px;margin-bottom:4px;background:var(--bg);border-radius:0 6px 6px 0">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start">
-        <div style="min-width:0;flex:1">
-          <div style="display:flex;align-items:center;gap:5px"><span style="width:6px;height:6px;border-radius:50%;background:${c}"></span><span style="font-size:11px;font-weight:600;color:${c}">${s.subject||'未分类'}</span></div>
-          <div style="font-size:10px;color:var(--text3);margin-top:2px">${s.date.slice(5)}${isToday?'(今天)':''} ${s.time?'🕐 '+s.time:''}${s.note?' · 📝 '+s.note:''}</div>
-          ${(s.vocab>0||s.spell>0||s.listening||s.speaking)?`<div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap">${s.vocab>0?'<span style="background:#4f46e515;color:#4f46e5;border-radius:8px;padding:1px 5px;font-size:9px">🔤'+s.vocab+'</span>':''}${s.spell>0?'<span style="background:#05966915;color:#059669;border-radius:8px;padding:1px 5px;font-size:9px">✍️'+s.spell+'</span>':''}${s.listening?'<span style="background:#d9770615;color:#d97706;border-radius:8px;padding:1px 5px;font-size:9px">👂</span>':''}${s.speaking?'<span style="background:#dc262615;color:#dc2626;border-radius:8px;padding:1px 5px;font-size:9px">🗣️</span>':''}</div>`:''}
-        </div>
-        <button class="btn btn-sm btn-ghost" style="font-size:10px;padding:3px 6px" onclick="editSupervision('${s.id}')">编辑</button>
-      </div>
+    <div style="font-size:12px;font-weight:600;margin-bottom:6px">📅 最近30天打卡日历</div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:3px">`;
+  calDays.forEach(cd=>{
+    const vocab=cd.vocab;
+    const bg=cd.count===0?'#f3f4f6':vocab===0?'#a7f3d0':vocab<20?'#34d399':'#059669';
+    const fg=cd.count===0?'var(--text3)':'#fff';
+    const dayNum=parseInt(cd.date.slice(8));
+    const dDow=new Date(cd.date+'T00:00:00').getDay();
+    html+=`<div style="background:${bg};border-radius:6px;padding:5px 3px;text-align:center;${cd.isToday?'outline:1.5px solid #ef4444;outline-offset:-1px':''}">
+      <div style="font-size:9px;color:${cd.count===0?'var(--text3)':'#fff'};opacity:0.85">${dowCN[dDow]}</div>
+      <div style="font-size:14px;font-weight:700;color:${fg};line-height:1.1;margin:1px 0">${dayNum}</div>
+      <div style="font-size:9px;color:${fg};font-weight:600">${cd.count>0?(vocab>0?'🔤'+vocab:'✓'):'-'}</div>
     </div>`;
   });
-  html+=`</div>`;
+  html+=`</div>
+    <div style="display:flex;align-items:center;gap:5px;margin-top:6px;font-size:9px;color:var(--text3)">
+      <span>少</span>
+      <div style="width:10px;height:10px;border-radius:2px;background:#f3f4f6"></div>
+      <div style="width:10px;height:10px;border-radius:2px;background:#a7f3d0"></div>
+      <div style="width:10px;height:10px;border-radius:2px;background:#34d399"></div>
+      <div style="width:10px;height:10px;border-radius:2px;background:#059669"></div>
+      <span>多</span>
+      <span style="margin-left:6px">${calStartStr} ~ ${calEndStr}</span>
+    </div>
+  </div>`;
   // 学习打卡汇总
   const ckSum=getCkSummary(studentId);
   if(ckSum){
@@ -2614,7 +2577,7 @@ function showSvPersonDetail(studentId){
     activeTypes.forEach(t=>{
       const val=t.key==='vocab'?ckSum.vocabTotal:t.key==='spell'?ckSum.spellTotal:t.key==='listening'?ckSum.listenDays:ckSum.speakDays;
       const unit=t.hasCount?'总':'天';
-      html+=`<div style="background:#fff;border-radius:6px;padding:6px 4px;text-align:center"><div style="font-size:15px;font-weight:700;color:${t.color}">${val}</div><div style="font-size:8px;color:#888">${t.icon}${t.label}(${unit})</div></div>`;
+      html+=`<div style="background:var(--card);border-radius:6px;padding:6px 4px;text-align:center"><div style="font-size:15px;font-weight:700;color:${t.color}">${val}</div><div style="font-size:8px;color:#888">${t.icon}${t.label}(${unit})</div></div>`;
     });
     html+=`</div>
       <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-bottom:6px">
@@ -2639,6 +2602,30 @@ function showSvPersonDetail(studentId){
     html+=`</div></div>`;
     }
   }
+  // 最近记录（可展开折叠）
+  const initCount=Math.min(5,allRecords.length);
+  html+=`<div style="margin-bottom:8px" id="sv-recent-section">`;
+  html+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">`;
+  html+=`<span style="font-size:12px;font-weight:600">📝 最近记录（共${allRecords.length}条）</span>`;
+  if(allRecords.length>5){
+    html+=`<button class="btn btn-sm btn-ghost" id="sv-recent-btn" style="font-size:10px;padding:2px 8px" onclick="toggleSvRecent(${allRecords.length}, ${initCount})">展开全部</button>`;
+  }
+  html+=`</div>`;
+  allRecords.forEach((s,i)=>{
+    const c=subjectColor(s.subject||'未分类'); const isToday=s.date===today;
+    const hidden=i>=initCount?'display:none;':'';
+    html+=`<div class="sv-recent-item" style="${hidden}border-left:3px solid ${c};padding:6px 10px;margin-bottom:4px;background:var(--bg);border-radius:0 6px 6px 0">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div style="min-width:0;flex:1">
+          <div style="display:flex;align-items:center;gap:5px"><span style="width:6px;height:6px;border-radius:50%;background:${c}"></span><span style="font-size:11px;font-weight:600;color:${c}">${s.subject||'未分类'}</span></div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">${s.date.slice(5)}${isToday?'(今天)':''} ${s.time?'🕐 '+s.time:''}${s.note?' · 📝 '+s.note:''}</div>
+          ${(s.vocab>0||s.spell>0||s.listening||s.speaking)?`<div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap">${s.vocab>0?'<span style="background:#4f46e515;color:#4f46e5;border-radius:8px;padding:1px 5px;font-size:9px">🔤'+s.vocab+'</span>':''}${s.spell>0?'<span style="background:#05966915;color:#059669;border-radius:8px;padding:1px 5px;font-size:9px">✍️'+s.spell+'</span>':''}${s.listening?'<span style="background:#d9770615;color:#d97706;border-radius:8px;padding:1px 5px;font-size:9px">👂</span>':''}${s.speaking?'<span style="background:#dc262615;color:#dc2626;border-radius:8px;padding:1px 5px;font-size:9px">🗣️</span>':''}</div>`:''}
+        </div>
+        <button class="btn btn-sm btn-ghost" style="font-size:10px;padding:3px 6px" onclick="editSupervision('${s.id}')">编辑</button>
+      </div>
+    </div>`;
+  });
+  html+=`</div>`;
   const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button><button class="btn btn-primary" style="flex:1" onclick="exportSvPersonReport('${studentId}')">📊 导出报告</button>`;
   openModal(html,footer);
   setSheetTitle('👤 '+stuName+' 打卡详情');
@@ -3437,19 +3424,16 @@ function exportSvPersonReport(studentId){
     });
   });
   const subjStats=Object.entries(subjMap).map(([name,v])=>({name,count:v.count,days:v.days.size})).sort((a,b)=>b.count-a.count);
-  const dowCount=[0,0,0,0,0,0,0];
-  allRecords.forEach(s=>{ dowCount[dayOfWeek(s.date)]++; });
-  const dowLabels=['日','一','二','三','四','五','六'];
-  const maxDow=Math.max(1,...dowCount);
   const avatarColor=subjStats.length>0?subjectColor(subjStats[0].name):'#4f46e5';
-  // 最近30天打卡日历
+  // 最近30天打卡日历（显示单词个数）
   const calEnd=new Date(today+'T00:00:00');
   const calStart=new Date(calEnd); calStart.setDate(calStart.getDate()-29);
   const calDays=[];
   for(let d=new Date(calStart); d<=calEnd; d.setDate(d.getDate()+1)){
     const ds=fmtDate(d);
     const recs=allRecords.filter(s=>s.date===ds);
-    calDays.push({date:ds,count:recs.length,isToday:ds===today});
+    const vocabCount=recs.reduce((sum,s)=>sum+(s.vocab||0),0);
+    calDays.push({date:ds,count:recs.length,vocab:vocabCount,isToday:ds===today});
   }
   const dowCN=['日','一','二','三','四','五','六'];
   const calStartStr=calStart.toISOString().slice(5,10).replace('-','/');
@@ -3478,14 +3462,15 @@ function exportSvPersonReport(studentId){
   html+=`<div style="margin-bottom:14px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">📅 最近30天打卡日历</div>`;
   html+=`<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px">`;
   calDays.forEach(cd=>{
-    const bg=cd.count===0?'#f3f4f6':cd.count===1?'#a7f3d0':cd.count===2?'#34d399':'#059669';
+    const vocab=cd.vocab;
+    const bg=cd.count===0?'#f3f4f6':vocab===0?'#a7f3d0':vocab<20?'#34d399':'#059669';
     const fg=cd.count===0?'#999':'#fff';
     const dayNum=parseInt(cd.date.slice(8));
     const dDow=new Date(cd.date+'T00:00:00').getDay();
     html+=`<div style="background:${bg};border-radius:6px;padding:5px 3px;text-align:center;${cd.isToday?'outline:1.5px solid #ef4444;outline-offset:-1px':''}">
       <div style="font-size:9px;color:${cd.count===0?'#bbb':'#fff'};opacity:0.85">${dowCN[dDow]}</div>
       <div style="font-size:15px;font-weight:700;color:${fg};line-height:1.1;margin:1px 0">${dayNum}</div>
-      <div style="font-size:9px;color:${fg};font-weight:600">${cd.count>0?cd.count+'次':'-'}</div>
+      <div style="font-size:9px;color:${fg};font-weight:600">${cd.count>0?(vocab>0?'🔤'+vocab:'✓'):'-'}</div>
     </div>`;
   });
   html+=`</div>
@@ -3499,18 +3484,6 @@ function exportSvPersonReport(studentId){
       <span style="margin-left:8px">${calStartStr} ~ ${calEndStr}</span>
     </div>
   </div>`;
-  // 科目分布
-  if(subjStats.length>0){
-    html+=`<div style="margin-bottom:14px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">📚 科目分布</div>`;
-    subjStats.forEach(st=>{ const c=subjectColor(st.name); const pct=totalVisits>0?Math.round(st.count/totalVisits*100):0;
-      html+=`<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px"><span style="width:8px;height:8px;border-radius:50%;background:${c};flex-shrink:0"></span><span style="font-size:12px;min-width:60px">${st.name}</span><div style="flex:1;height:14px;background:#f3f4f6;border-radius:7px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${c};border-radius:7px"></div></div><span style="font-size:11px;color:#666;min-width:60px;text-align:right">${st.count}次·${st.days}天</span></div>`; });
-    html+=`</div>`;
-  }
-  // 星期分布
-  html+=`<div style="margin-bottom:14px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">📆 星期分布</div><div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">`;
-  for(let i=1;i<=7;i++){ const dow=i%7; const count=dowCount[dow]; const h=Math.max(6,Math.round(count/maxDow*44)); const c=count>0?avatarColor:'#e5e7eb';
-    html+=`<div style="text-align:center"><div style="height:${h}px;background:${c};border-radius:2px;margin:0 auto 4px;width:60%"></div><div style="font-size:11px;font-weight:${count>0?'700':'400'};color:${count>0?'#333':'#999'}">${count}</div><div style="font-size:9px;color:#999;margin-top:1px">${dowLabels[dow]}</div></div>`; }
-  html+=`</div></div>`;
   // 学习打卡汇总
   const ckSum=getCkSummary(studentId);
   if(ckSum && ckSum.totalDays>0){
@@ -3556,9 +3529,10 @@ function exportSvPersonReport(studentId){
     html+=`</div></div>`;
     }
   }
-  // 全部记录（在学习打卡汇总下方）
-  html+=`<div style="margin-bottom:10px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">📝 全部记录（${allRecords.length}条）</div>`;
-  allRecords.forEach(s=>{ const c=subjectColor(s.subject||'未分类'); const isToday=s.date===today;
+  // 全部记录（在学习打卡汇总下方，仅最近5条）
+  const expRecs=allRecords.slice(0,5);
+  html+=`<div style="margin-bottom:10px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">📝 最近记录（共${allRecords.length}条，显示前${expRecs.length}条）</div>`;
+  expRecs.forEach(s=>{ const c=subjectColor(s.subject||'未分类'); const isToday=s.date===today;
     html+=`<div style="border-left:3px solid ${c};padding:6px 10px;margin-bottom:5px;background:#f9fafb;border-radius:0 6px 6px 0">
       <div style="display:flex;align-items:center;gap:5px"><span style="width:6px;height:6px;border-radius:50%;background:${c}"></span><span style="font-size:11px;font-weight:600;color:${c}">${s.subject||'未分类'}</span><span style="font-size:10px;color:#999;margin-left:auto">${s.date.slice(5)}${isToday?'(今天)':''}</span></div>
       <div style="font-size:10px;color:#666;margin-top:2px">${s.time?'🕐 '+s.time:''}${s.note?' · 📝 '+s.note:''}</div>
@@ -6879,7 +6853,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v22';
+    const sw=`const C='tw-cache-v23';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
