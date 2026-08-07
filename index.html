@@ -542,7 +542,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.22.0';
+const APP_VERSION = 'v3.22.1';
 const APP_VERSION_DATE = '2026-08-07';
 
 const $ = s => document.querySelector(s);
@@ -7117,7 +7117,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v25';
+    const sw=`const C='tw-cache-v26';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
