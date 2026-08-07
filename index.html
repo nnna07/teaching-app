@@ -542,7 +542,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.20.8';
+const APP_VERSION = 'v3.21.0';
 const APP_VERSION_DATE = '2026-08-07';
 
 const $ = s => document.querySelector(s);
@@ -613,6 +613,25 @@ function teacherColor(id){
   const arr = Object.keys(DB.data.teachers).filter(k=>!DB.data.teachers[k]._deleted);
   const i = arr.indexOf(id);
   return TEACHER_COLORS[i % TEACHER_COLORS.length] || '#6b7280';
+}
+
+// 获取课次的老师显示名（含合教老师）
+function lessonTeacherDisplay(l, opts={}){
+  const t = DB.data.teachers[l.teacherId];
+  const coT = l.coTeacherId ? DB.data.teachers[l.coTeacherId] : null;
+  const mainName = t && !t._deleted ? t.name : '-';
+  if(coT && !coT._deleted && coT.id!==l.teacherId){
+    if(opts.short) return `${mainName}/${coT.name}`;
+    return `${mainName}(上半)·${coT.name}(下半)`;
+  }
+  return mainName;
+}
+
+// 获取课次所有老师ID（含合教老师）
+function lessonAllTeacherIds(l){
+  const ids = [l.teacherId];
+  if(l.coTeacherId && l.coTeacherId!==l.teacherId) ids.push(l.coTeacherId);
+  return ids;
 }
 const subjectColorMap = {};
 function subjectColor(title){
@@ -1200,7 +1219,7 @@ function renderLessons(){
 
   const list = $('#lessons-list');
   let lessons = Object.values(DB.data.lessons).filter(l=>!l._deleted);
-  if(lessonsTeacherFilter!=='all') lessons = lessons.filter(l=>l.teacherId===lessonsTeacherFilter);
+  if(lessonsTeacherFilter!=='all') lessons = lessons.filter(l=>lessonAllTeacherIds(l).includes(lessonsTeacherFilter));
   $('#lesson-count').textContent = lessons.length;
   if(lessons.length===0){
     list.innerHTML = `<div class="empty"><div class="em-ico">📚</div><div>还没有课次</div><div style="margin-top:10px;display:flex;gap:6px;justify-content:center"><button class="btn btn-primary" onclick="openLessonEdit()">+ 新建课次</button><button class="btn btn-ghost" onclick="openImport()">📥 导入</button></div></div>`;
@@ -1258,7 +1277,7 @@ function renderLessons(){
         <div style="flex:1">
           <div style="font-size:11px;color:${color};font-weight:600">⏰ 下一节 · ${timeStr}</div>
           <div style="font-size:14px;font-weight:600;margin:2px 0">${nextLesson.title}</div>
-          <div style="font-size:11px;color:var(--text2)">👤 ${nt?.name||'-'} · 🎓 ${stus||'-'}</div>
+          <div style="font-size:11px;color:var(--text2)">👤 ${lessonTeacherDisplay(nextLesson,{short:true})} · 🎓 ${stus||'-'}</div>
         </div>
         <button class="btn btn-sm btn-ghost" onclick="openLessonDetail('${nextLesson.id}','${today}')">详情</button>
       </div>
@@ -1372,7 +1391,7 @@ function lessonListItem(l, dateStr){
     </div>
     <div class="l-body">
       <div class="l-top">
-        <div><div class="l-title">${l.title}${done?' <span style="color:var(--green);font-size:12px">✓</span>':''}</div><div class="l-sub">${t&&!t._deleted?'👤 '+(t.name||'-'):''}${subT?'<span style="color:var(--red)">→代课 '+subT.name+'</span>':''} · ${timeStr}</div></div>
+        <div><div class="l-title">${l.title}${done?' <span style="color:var(--green);font-size:12px">✓</span>':''}</div><div class="l-sub">${t&&!t._deleted?'👤 '+lessonTeacherDisplay(l,{short:true}):''}${subT?'<span style="color:var(--red)">→代课 '+subT.name+'</span>':''} · ${timeStr}</div></div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">${courseTypeTag(l.type)}${modeTag}${batchTag}</div>
       </div>
       <div class="l-stus">${stus.length?stus.map(s=>`<span class="stu" onclick="event.stopPropagation();openStudentView('${s.id}')">${s.name}</span>`).join(''):'<span style="color:var(--text3)">未分配学生</span>'}</div>
@@ -1426,7 +1445,7 @@ function renderCourses(){
 
   // 获取过滤后的课次
   let lessons = Object.values(DB.data.lessons).filter(l=>!l._deleted);
-  if(coursesTeacherFilter!=='all') lessons = lessons.filter(l=>l.teacherId===coursesTeacherFilter);
+  if(coursesTeacherFilter!=='all') lessons = lessons.filter(l=>lessonAllTeacherIds(l).includes(coursesTeacherFilter));
   if(modeFilter==='week') lessons = lessons.filter(l=>l.mode==='week');
   if(modeFilter==='single') lessons = lessons.filter(l=>l.mode==='single');
   const kw = (window._courseSearch||'').trim().toLowerCase();
@@ -1453,7 +1472,7 @@ function renderCourses(){
   const singleCount = lessons.filter(l=>l.mode==='single').length;
   const batchCount = lessons.filter(l=>l.batchId).length;
   const studentCount = new Set(lessons.flatMap(l=>l.studentIds)).size;
-  const teacherCount = new Set(lessons.map(l=>l.teacherId)).size;
+  const teacherCount = new Set(lessons.flatMap(l=>lessonAllTeacherIds(l))).size;
   const orphanLessons = lessons.filter(isOrphanLesson);
   $('#courses-stats').innerHTML = lessons.length ? `<div class="stat-grid"><div class="stat-card"><div class="s-num">${lessons.length}</div><div class="s-lbl">总课次</div></div><div class="stat-card"><div class="s-num">${weekCount}</div><div class="s-lbl">周循环</div></div><div class="stat-card"><div class="s-num">${singleCount}</div><div class="s-lbl">单次</div></div><div class="stat-card"><div class="s-num">${studentCount}</div><div class="s-lbl">学生数</div></div></div>${orphanLessons.length?`<div style="background:#fee2e2;border:1px solid #fecaca;border-radius:9px;padding:8px 10px;margin-top:8px;display:flex;align-items:center;gap:8px;font-size:12px;color:#991b1b"><span>⚠️ 有 ${orphanLessons.length} 个无效课次（老师/学生已删除）</span><button class="btn btn-sm btn-danger" style="margin-left:auto;font-size:11px;padding:4px 9px" onclick="cleanOrphanLessons()">清理</button></div>`:''}` : '';
 
@@ -1502,7 +1521,7 @@ function renderCourses(){
       return (a.date||'').localeCompare(b.date||'')||a.hhmm.localeCompare(b.hhmm);
     });
     const subjColor = subjectColor(subj);
-    const groupTeachers = [...new Set(groupLessons.map(l=>l.teacherId))];
+    const groupTeachers = [...new Set(groupLessons.flatMap(l=>lessonAllTeacherIds(l)))];
     const groupStudents = [...new Set(groupLessons.flatMap(l=>l.studentIds))];
 
     const collapsed = _courseCollapsed[subj];
@@ -1547,7 +1566,7 @@ function courseListItem(l, dateStr, subjColor){
       <input type="checkbox" class="batch-check" data-id="${l.id}" ${checked} onchange="toggleBatchLesson('${l.id}')">
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:500">${l.title} ${orphanTagHtml}${done?'<span style="color:var(--green);font-size:11px">✓</span>':''}</div>
-        <div style="font-size:11px;color:var(--text3)">${lessonTimeRange(l)} · ${l.duration}分钟 · 👤 ${t?.name||'老师已删除'}${subT?' → 代课 '+subT.name:''}${stus.length?' · 🎓 '+stus.map(s=>s.name).join('、'):(l.studentIds.length?' · 🎓 学生已删除':' · 🎓 未分配学生')}</div>
+        <div style="font-size:11px;color:var(--text3)">${lessonTimeRange(l)} · ${l.duration}分钟 · 👤 ${t&&!t._deleted?lessonTeacherDisplay(l,{short:true}):'老师已删除'}${subT?' → 代课 '+subT.name:''}${stus.length?' · 🎓 '+stus.map(s=>s.name).join('、'):(l.studentIds.length?' · 🎓 学生已删除':' · 🎓 未分配学生')}</div>
         <div style="margin-top:3px">${modeTag}${batchTag}${courseTypeTag(l.type)}${marks}</div>
       </div>
     </div>`;
@@ -1562,7 +1581,7 @@ function courseListItem(l, dateStr, subjColor){
       <div class="l-top">
         <div>
           <div class="l-title">${l.title}${orphanTagHtml}${done?' <span style="color:var(--green);font-size:12px">✓</span>':''}</div>
-          <div class="l-sub">${t&&!t._deleted?'👤 '+(t.name||'-'):'<span style="color:var(--red)">👤 老师已删除</span>'}${subT?'<span style="color:var(--red)">→代课 '+subT.name+'</span>':''} · ${timeStr} · ${lessonTimeRange(l)}</div>
+          <div class="l-sub">${t&&!t._deleted?'👤 '+lessonTeacherDisplay(l,{short:true}):'<span style="color:var(--red)">👤 老师已删除</span>'}${subT?'<span style="color:var(--red)">→代课 '+subT.name+'</span>':''} · ${timeStr} · ${lessonTimeRange(l)}</div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">${courseTypeTag(l.type)}${modeTag}${batchTag}</div>
       </div>
@@ -3588,6 +3607,7 @@ function openLessonEdit(id, prefill={}){
   const teachers = Object.values(DB.data.teachers).filter(t=>!t._deleted);
   if(teachers.length===0){ toast('请先添加老师'); switchTab('mine'); openTeacherEdit(); return; }
   const subOpts = `<option value="">无代课</option>`+teachers.map(t=>`<option value="${t.id}" ${l?.subTeacherId===t.id?'selected':''}>${t.name}</option>`).join('');
+  const coOpts = `<option value="">无</option>`+teachers.map(t=>`<option value="${t.id}" ${l?.coTeacherId===t.id?'selected':''}>${t.name}</option>`).join('');
   const html = `
     <div class="form-row"><label>课次名称 <span class="req">*</span></label><input class="form-control" id="f-title" value="${l?.title||''}" placeholder="如:钢琴基础"></div>
     <div class="form-row"><label>类型</label><div class="chip-group" id="f-type">
@@ -3598,6 +3618,10 @@ function openLessonEdit(id, prefill={}){
     </div>
     <div class="form-row"><label>授课老师 <span class="req">*</span></label>
       <select class="form-control" id="f-teacher">${teachers.map(t=>`<option value="${t.id}" ${l?.teacherId===t.id||(!l&&prefill.teacherId===t.id)?'selected':''}>${t.name}</option>`).join('')}</select>
+    </div>
+    <div class="form-row"><label>合教老师(下半节)</label>
+      <select class="form-control" id="f-co-teacher">${coOpts}</select>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">两位老师合上一节课时选择，主老师负责上半节，合教老师负责下半节</div>
     </div>
     <div class="form-row"><label>代课老师</label>
       <select class="form-control" id="f-sub-teacher">${subOpts}</select>
@@ -3787,6 +3811,7 @@ function syncLessonSessions(lessonId){
     if(s._deleted || s.lessonId!==lessonId) return;
     s.teacherId=l.teacherId;
     s.subTeacherId=l.subTeacherId||'';
+    s.coTeacherId=l.coTeacherId||'';
     s.studentIds=[...l.studentIds];
     s.planStart=l.hhmm;
     s.planEnd=planEnd;
@@ -3831,6 +3856,7 @@ function saveLesson(id){
     const baseStudentIds=id?(DB.data.lessons[id]?.studentIds||[]):[];
     const baseMarks=id?(DB.data.lessons[id]?.marks||[]):[];
     const baseSubTeacherId=id?(DB.data.lessons[id]?.subTeacherId||''):'';
+    const baseCoTeacherId=id?(DB.data.lessons[id]?.coTeacherId||''):'';
     // 删除原课次及其关联session
     if(id){
       const old=DB.data.lessons[id]; if(old){ old._deleted=true; old.updatedAt=t; }
@@ -3840,7 +3866,7 @@ function saveLesson(id){
     }
     dates.forEach(ds=>{
       const nid=uid();
-      DB.data.lessons[nid]={id:nid,title,type,teacherId,studentIds:[...baseStudentIds],marks:JSON.parse(JSON.stringify(baseMarks)),mode:'single',date:ds,weekday:dayOfWeek(ds),hhmm,duration,note,subTeacherId:baseSubTeacherId,batchId,createdAt:t,updatedAt:t};
+      DB.data.lessons[nid]={id:nid,title,type,teacherId,studentIds:[...baseStudentIds],marks:JSON.parse(JSON.stringify(baseMarks)),mode:'single',date:ds,weekday:dayOfWeek(ds),hhmm,duration,note,subTeacherId:baseSubTeacherId,coTeacherId:baseCoTeacherId,batchId,createdAt:t,updatedAt:t};
     });
     DB.save(); closeModal(); refreshCurrentView(); toast(`已创建 ${dates.length} 个课次${id?'(已替换原课次)':''}`);
     return;
@@ -3855,12 +3881,13 @@ function saveLesson(id){
   else{data.date=$('#f-date').value;data.weekday=dayOfWeek(data.date);}
   if(id){
     data.subTeacherId=$('#f-sub-teacher').value;
+    data.coTeacherId=$('#f-co-teacher').value;
     DB.data.lessons[id]={...DB.data.lessons[id],...data};
     syncLessonSessions(id);
   }
   else{
     const nid=uid();
-    DB.data.lessons[nid]={id:nid,studentIds:[],marks:[],createdAt:t,...data,subTeacherId:$('#f-sub-teacher').value};
+    DB.data.lessons[nid]={id:nid,studentIds:[],marks:[],createdAt:t,...data,subTeacherId:$('#f-sub-teacher').value,coTeacherId:$('#f-co-teacher').value};
   }
   DB.save(); closeModal(); refreshCurrentView(); toast('已保存');
 }
@@ -4052,8 +4079,8 @@ function getFilteredLessons(){
   const ct = currentTeacher();
   return Object.values(DB.data.lessons).filter(l=>{
     if(l._deleted) return false;
-    if(filterTeacherId!=='all' && l.teacherId!==filterTeacherId) return false;
-    if(ttModeFilter==='mine' && ct && l.teacherId!==ct.id) return false;
+    if(filterTeacherId!=='all' && !lessonAllTeacherIds(l).includes(filterTeacherId)) return false;
+    if(ttModeFilter==='mine' && ct && !lessonAllTeacherIds(l).includes(ct.id)) return false;
     return true;
   });
 }
@@ -4133,7 +4160,7 @@ function renderWeekView(lessons){
           <div class="tl-dot" style="background:${color}"></div>
           <div class="tl-time" style="color:${color}">${l.hhmm} - ${endTime}</div>
           <div class="tl-title">${l.title} <span style="font-size:10px;color:var(--text3)">[${courseTypeLabel(l.type)}]</span></div>
-          <div class="tl-sub">${ttModeFilter==='mine'?'':'👤 '+(t?.name||'-')+' · '}${stus?'🎓 '+stus:''}</div>
+          <div class="tl-sub">${ttModeFilter==='mine'?'':'👤 '+lessonTeacherDisplay(l,{short:true})+' · '}${stus?'🎓 '+stus:''}</div>
           ${lessonActions(l, ds)}
         </div>`;
       });
@@ -4178,7 +4205,7 @@ function renderMonthView(lessons){
         <div class="tl-dot" style="background:${it.color}"></div>
         <div class="tl-time" style="color:${it.color}">${l.hhmm}</div>
         <div class="tl-title">${l.title}</div>
-        <div class="tl-sub">👤 ${t?.name||''}</div>
+        <div class="tl-sub">👤 ${lessonTeacherDisplay(l,{short:true})}</div>
         ${lessonActions(l, todayStr())}
       </div>`;
     });
@@ -4297,7 +4324,7 @@ function renderDayView(lessons){
     html += `<div class="dt-event" style="top:${top}px;height:${height}px;${dtPos};border-left-color:${color}" onclick="openLessonDetail('${l.id}','${dateStr}')">
       <div class="dt-time" style="color:${color}">${lessonTimeRange(l)}${subT?' <span style="color:var(--red)">代</span>':''}</div>
       <div class="dt-title">${l.title} <span style="font-size:10px;color:var(--text3);font-weight:400">[${courseTypeLabel(l.type)}]</span></div>
-      ${height>60?`<div class="dt-sub">${ttModeFilter==='mine'?'':'👤 '+(t?.name||'-')+(subT?'→'+subT.name:'')+' · '}${stus?'🎓 '+stus:''}</div>`:''}
+      ${height>60?`<div class="dt-sub">${ttModeFilter==='mine'?'':'👤 '+lessonTeacherDisplay(l,{short:true})+(subT?'→'+subT.name:'')+' · '}${stus?'🎓 '+stus:''}</div>`:''}
       ${height>80 && marks?`<div style="margin-top:3px">${marks}</div>`:''}
       ${height>100 && l.note?`<div style="font-size:10px;color:var(--text3);margin-top:3px">📝 ${l.note}</div>`:''}
       <div class="dt-actions">
@@ -4337,7 +4364,7 @@ function openDayDetail(dateStr){
       <div class="tl-dot" style="background:${color}"></div>
       <div class="tl-time" style="color:${color}">${lessonTimeRange(l)} · ${l.duration}分钟${subT?' <span style="color:var(--red)">(代)</span>':''}</div>
       <div class="tl-title">${l.title}</div>
-      <div class="tl-sub">👤 ${t?.name||''}${subT?' → 代课 '+subT.name:''} ${stus?'· 🎓 '+stus:''}</div>
+      <div class="tl-sub">👤 ${lessonTeacherDisplay(l,{short:true})}${subT?' → 代课 '+subT.name:''} ${stus?'· 🎓 '+stus:''}</div>
       ${l.note?`<div style="font-size:10px;color:var(--text3);margin-top:3px">📝 ${l.note}</div>`:''}
       ${lessonActions(l, dateStr)}
     </div>`;
@@ -4395,7 +4422,7 @@ function renderBatchManageModal(){
         <input type="checkbox" class="batch-check" data-id="${l.id}" ${checked} onchange="toggleBatchLesson('${l.id}')">
         <div style="flex:1;min-width:0">
           <div style="font-size:13px;font-weight:500">${l.title} <span style="font-size:10px;color:var(--text3);font-weight:400">[${courseTypeLabel(l.type)}]</span></div>
-          <div style="font-size:11px;color:var(--text3)">${lessonTimeRange(l)} · ${l.duration}分钟 · 👤 ${t?.name||'-'}${stus?' · 🎓 '+stus:''}</div>
+          <div style="font-size:11px;color:var(--text3)">${lessonTimeRange(l)} · ${l.duration}分钟 · 👤 ${lessonTeacherDisplay(l,{short:true})}${stus?' · 🎓 '+stus:''}</div>
         </div>
       </div>`;
     }).join('');
@@ -4513,7 +4540,7 @@ function openLessonDetail(lessonId,dateStr){
       <div style="font-size:12px;color:var(--text3);margin-top:3px">${dateStr} ${lessonTimeRange(l)} · ${l.duration}分钟</div>
     </div>
     <div style="font-size:13px;line-height:2">
-      <div>👨‍🏫 老师：${t?.name||'未分配'} ${subT?'<span style="color:var(--red)">(代课: '+subT.name+')</span>':''}</div>
+      <div>👨‍🏫 老师：${lessonTeacherDisplay(l)} ${subT?'<span style="color:var(--red)">(代课: '+subT.name+')</span>':''}</div>
       <div>🎓 学生：${stus.map(s=>s.name).join('、')||'无'}</div>
       <div>🏷️ 类型：${courseTypeLabel(l.type)}</div>
       <div>🔁 方式：${l.mode==='week'?(l.weekday==='all'?'每天':('每周'+dayNames[l.weekday])):'单次'}</div>
@@ -5290,7 +5317,7 @@ function openStudentView(studentId){
       <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:10px;color:var(--text3)">${label}</div>${sgDone?'<span style="font-size:10px;color:var(--green)">✓</span>':''}</div>
       <div class="sg-time">${lessonTimeRange(l)} · ${l.duration}分钟${subT?' <span style="color:var(--red)">代</span>':''}</div>
       <div class="sg-title">${l.title}</div>
-      <div class="sg-teacher">👤 ${t?.name||'未分配'}${subT?' → 代课 '+subT.name:''}</div>
+      <div class="sg-teacher">👤 ${lessonTeacherDisplay(l)}${subT?' → 代课 '+subT.name:''}</div>
       <div style="font-size:10px;color:var(--text2);margin-top:2px">🎓 ${allStus||'无学生'}</div>
       ${l.note?`<div style="font-size:10px;color:var(--text3);margin-top:3px">📝 ${l.note}</div>`:''}
       ${marks?`<div style="margin-top:3px">${marks}</div>`:''}
@@ -5401,7 +5428,7 @@ function openParentReport(studentId){
         const rem=subj.total-subj.used;
         const pct=subj.total>0?Math.round(subj.used/subj.total*100):0;
         // 找该科目的老师
-        const subjTeachers=[...new Set(lessons.filter(l=>normalizeSubject(l.title)===subj.name).map(l=>DB.data.teachers[l.teacherId]?.name).filter(Boolean))].join('、');
+        const subjTeachers=[...new Set(lessons.filter(l=>normalizeSubject(l.title)===subj.name).flatMap(l=>lessonAllTeacherIds(l).map(tid=>DB.data.teachers[tid]?.name).filter(Boolean)))].join('、');
         return `<tr><td class="left"><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${subj.color};margin-right:6px"></span>${subj.name}</td><td>${subjTeachers||'-'}</td><td>${subj.total}</td><td>${subj.used}</td><td class="${rem===0&&subj.total>0?'red':'green'}">${rem}</td><td>${pct}%</td></tr>`;
       }).join('')}</tbody>
     </table>`;
@@ -5420,7 +5447,7 @@ function openParentReport(studentId){
         if(ss.status==='done'){stTxt='✓ 已完成';stColor='color:#059669;font-weight:600';}
         else if(ss.status==='absent'){stTxt='✗ 缺勤';stColor='color:#dc2626;font-weight:600';}
         else{stTxt='📅 请假';stColor='color:#d97706;font-weight:600';}
-        return `<tr><td>${ss.date}</td><td>${wd}</td><td class="left">${l?.title||'-'}</td><td>${t?.name||'-'}</td><td>${dur}</td><td style="${stColor}">${stTxt}</td></tr>`;
+        return `<tr><td>${ss.date}</td><td>${wd}</td><td class="left">${l?.title||'-'}</td><td>${l?lessonTeacherDisplay(l,{short:true}):(t?.name||'-')}</td><td>${dur}</td><td style="${stColor}">${stTxt}</td></tr>`;
       }).join('')}</tbody>
     </table>`;
     if(allSessions.length>50){
@@ -5544,7 +5571,7 @@ function renderRecordsDay(){
         const info=s.actualStart&&s.actualEnd?`${fmtTime(s.actualStart)}-${fmtTime(s.actualEnd)} · ${fmtDur(s.actualEnd-s.actualStart)}`:'已完成';
         statusBadge=`<span style="font-size:10px;color:var(--green);font-weight:600">✓ 已完成</span>`;
         actionBtns=`<div style="display:flex;gap:5px;margin-top:6px"><button class="btn btn-sm btn-ghost" onclick="editSession('${s.id}')">编辑</button><button class="btn btn-sm btn-ghost" onclick="resetSession('${s.id}')">重置</button><button class="btn btn-sm btn-danger" onclick="delSession('${s.id}')">删除</button></div>`;
-        return `<div class="card" style="border-left:3px solid var(--green)"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div style="font-weight:600;font-size:14px">${l.title}</div><div style="font-size:11px;color:var(--text3);margin-top:2px">👤 ${t?.name||'-'} · 🎓 ${stus||'-'}</div></div><div style="text-align:right">${statusBadge}<div style="font-size:10px;color:var(--text3);margin-top:2px">${info}</div></div></div>${actionBtns}</div>`;
+        return `<div class="card" style="border-left:3px solid var(--green)"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div style="font-weight:600;font-size:14px">${l.title}</div><div style="font-size:11px;color:var(--text3);margin-top:2px">👤 ${lessonTeacherDisplay(l,{short:true})} · 🎓 ${stus||'-'}</div></div><div style="text-align:right">${statusBadge}<div style="font-size:10px;color:var(--text3);margin-top:2px">${info}</div></div></div>${actionBtns}</div>`;
       } else if(s.status==='absent'){
         statusBadge=`<span style="font-size:10px;color:var(--red);font-weight:600">✗ 缺勤</span>`;
       } else if(s.status==='leave'){
@@ -5619,7 +5646,7 @@ function renderRecordsWeek(){
       return `<div class="card" style="padding:9px 11px;border-left:3px solid var(--text3);background:#f9fafb;opacity:.85"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div style="font-size:13px;font-weight:500;color:var(--text3)">(课次已删除) <span style="font-size:9px">⚠️ 无效</span></div><div style="font-size:10px;color:var(--text3)">👤 ${t?.name||'老师已删除'} · 🎓 ${stus||'学生已删除'}</div></div><div style="text-align:right"><div style="font-size:11px;color:var(--text2)">${s.date}</div><div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end"><button class="btn btn-sm btn-danger" onclick="delSession('${s.id}')">删除</button></div></div></div></div>`;
     }
     const info=`${fmtTime(s.actualStart)}-${fmtTime(s.actualEnd)} · ${fmtDur(s.actualEnd-s.actualStart)}`;
-    return `<div class="card" style="padding:9px 11px"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div style="font-size:13px;font-weight:500">${l.title}</div><div style="font-size:10px;color:var(--text3)">👤 ${t?.name||''} · 🎓 ${stus||''}</div></div><div style="text-align:right"><div style="font-size:11px;color:var(--text2)">${s.date}</div><div style="font-size:10px;color:var(--text3)">${info}</div><div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end"><button class="btn btn-sm btn-ghost" onclick="editSession('${s.id}')">编辑</button><button class="btn btn-sm btn-danger" onclick="delSession('${s.id}')">删除</button></div></div></div></div>`;
+    return `<div class="card" style="padding:9px 11px"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div style="font-size:13px;font-weight:500">${l.title}</div><div style="font-size:10px;color:var(--text3)">👤 ${lessonTeacherDisplay(l,{short:true})} · 🎓 ${stus||''}</div></div><div style="text-align:right"><div style="font-size:11px;color:var(--text2)">${s.date}</div><div style="font-size:10px;color:var(--text3)">${info}</div><div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end"><button class="btn btn-sm btn-ghost" onclick="editSession('${s.id}')">编辑</button><button class="btn btn-sm btn-danger" onclick="delSession('${s.id}')">删除</button></div></div></div></div>`;
   }).join(''):'<div class="card" style="text-align:center;color:var(--text3);font-size:12px">本周暂无完成记录</div>';
   $('#records-content').innerHTML=html;
 }
@@ -5790,7 +5817,7 @@ function showDayRecords(dateStr){
       }
       const info=s.actualStart&&s.actualEnd?`${fmtTime(s.actualStart)}-${fmtTime(s.actualEnd)} · ${fmtDur(s.actualEnd-s.actualStart)}`:(s.status==='absent'?'缺勤':'请假');
       let sBadge=s.status==='done'?'<span style="color:var(--green);font-size:9px">✓</span>':s.status==='absent'?'<span style="color:var(--red);font-size:9px">✗</span>':'<span style="color:var(--amber);font-size:9px">📅</span>';
-      return `<div class="card" style="padding:9px 11px"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div style="font-size:13px;font-weight:500">${l.title} ${sBadge}</div><div style="font-size:10px;color:var(--text3)">👤 ${t?.name||''} · 🎓 ${stus||''}</div></div><div style="text-align:right"><div style="font-size:10px;color:var(--text3)">${info}</div><div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end"><button class="btn btn-sm btn-ghost" onclick="editSession('${s.id}')">编辑</button><button class="btn btn-sm btn-danger" onclick="delSession('${s.id}')">删除</button></div></div></div></div>`;
+      return `<div class="card" style="padding:9px 11px"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div style="font-size:13px;font-weight:500">${l.title} ${sBadge}</div><div style="font-size:10px;color:var(--text3)">👤 ${lessonTeacherDisplay(l,{short:true})} · 🎓 ${stus||''}</div></div><div style="text-align:right"><div style="font-size:10px;color:var(--text3)">${info}</div><div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end"><button class="btn btn-sm btn-ghost" onclick="editSession('${s.id}')">编辑</button><button class="btn btn-sm btn-danger" onclick="delSession('${s.id}')">删除</button></div></div></div></div>`;
     }).join('');
   }
   openModal(html); setSheetTitle(dateStr.slice(5)+' 记录');
@@ -5842,7 +5869,7 @@ function ensureTodaySessions(){
     const exists=Object.values(DB.data.sessions).some(s=>s.lessonId===l.id && s.date===today && !s._deleted);
     if(!exists){
       const sid=uid();
-      DB.data.sessions[sid]={id:sid,lessonId:l.id,teacherId:l.teacherId,studentIds:[...l.studentIds],date:today,planStart:l.hhmm,planEnd:'',actualStart:null,actualEnd:null,status:'planned',createdAt:t,updatedAt:t};
+      DB.data.sessions[sid]={id:sid,lessonId:l.id,teacherId:l.teacherId,studentIds:[...l.studentIds],date:today,planStart:l.hhmm,planEnd:'',actualStart:null,actualEnd:null,status:'planned',coTeacherId:l.coTeacherId||'',createdAt:t,updatedAt:t};
       created=true;
     }
   });
@@ -6006,7 +6033,7 @@ function renderMine(){
   // 老师列表
   const teachers=Object.values(DB.data.teachers).filter(t=>!t._deleted).sort((a,b)=>a.createdAt-b.createdAt);
   $('#teacher-list').innerHTML=teachers.length?teachers.map(t=>{
-    const tLessons=Object.values(DB.data.lessons).filter(l=>!l._deleted && l.teacherId===t.id);
+    const tLessons=Object.values(DB.data.lessons).filter(l=>!l._deleted && lessonAllTeacherIds(l).includes(t.id));
     const tStudents=new Set(tLessons.flatMap(l=>l.studentIds));
     return `<div style="display:flex;align-items:center;gap:9px;padding:7px 0;border-bottom:1px solid var(--border)"><span class="t-av" style="background:${teacherColor(t.id)}">${teacherInitial(t.name)}</span><div style="flex:1;cursor:pointer" onclick="openTeacherSchedule('${t.id}')"><div style="font-size:13px;font-weight:500">${t.name}</div><div style="font-size:10px;color:var(--text3)">${t.phone||'无电话'} · ${tLessons.length}个课次 · ${tStudents.size}个学生</div></div><button class="btn btn-sm btn-ghost" onclick="openTeacherSchedule('${t.id}')">课表</button><button class="btn btn-sm btn-ghost" onclick="openTeacherEdit('${t.id}')">编辑</button><button class="btn btn-sm btn-danger" onclick="delTeacher('${t.id}')">删</button></div>`;
   }).join(''):'<div style="color:var(--text3);font-size:12px;padding:6px 0">暂无老师</div>';
@@ -6059,7 +6086,7 @@ function renderMine(){
             const dur=ss.actualStart&&ss.actualEnd?Math.round((ss.actualEnd-ss.actualStart)/60000)+'分':(l?l.duration+'分':'-');
             const stCls=ss.status==='done'?'done':(ss.status==='absent'?'absent':'');
             const stTxt=ss.status==='done'?'✓已完成':(ss.status==='absent'?'缺勤':'请假');
-            return `<tr><td>${ss.date}</td><td>${l?.title||'-'}</td><td>${t?.name||'-'}</td><td>${dur}</td><td class="${stCls}">${stTxt}</td></tr>`;
+            return `<tr><td>${ss.date}</td><td>${l?.title||'-'}</td><td>${l?lessonTeacherDisplay(l,{short:true}):(t?.name||'-')}</td><td>${dur}</td><td class="${stCls}">${stTxt}</td></tr>`;
           }).join('')}</tbody>
         </table>
       </div>`;
@@ -6178,7 +6205,7 @@ function delTeacher(id){
 function openTeacherSchedule(teacherId){
   const t=DB.data.teachers[teacherId]; if(!t||t._deleted) return;
   const color=teacherColor(teacherId);
-  const lessons=Object.values(DB.data.lessons).filter(l=>!l._deleted && l.teacherId===teacherId);
+  const lessons=Object.values(DB.data.lessons).filter(l=>!l._deleted && lessonAllTeacherIds(l).includes(teacherId));
   const studentSet=new Set();
   lessons.forEach(l=>l.studentIds.forEach(sid=>studentSet.add(sid)));
   const students=Array.from(studentSet).map(id=>DB.data.students[id]).filter(s=>s&&!s._deleted);
@@ -6228,9 +6255,10 @@ function openTeacherSchedule(teacherId){
       const stus=l.studentIds.map(id=>DB.data.students[id]?.name).filter(Boolean).join('、');
       const subT=l.subTeacherId?DB.data.teachers[l.subTeacherId]:null;
       const timeStr=l.weekday==='all'?'每天':`每周${dayNames[l.weekday]}`;
+      const isCo = l.coTeacherId===teacherId;
       return `<div class="card" style="padding:9px 11px;border-left:3px solid ${color};cursor:pointer" onclick="openLessonDetail('${l.id}','${todayStr()}')">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
-          <div><div style="font-size:13px;font-weight:500">${l.title}</div><div style="font-size:10px;color:var(--text3)">${courseTypeTag(l.type)} ${timeStr} · 🎓 ${stus||'-'}</div></div>
+          <div><div style="font-size:13px;font-weight:500">${l.title} ${isCo?'<span style="font-size:9px;background:#8b5cf615;color:#8b5cf6;border-radius:4px;padding:1px 4px">合教(下半)</span>':''}</div><div style="font-size:10px;color:var(--text3)">${courseTypeTag(l.type)} ${timeStr} · 🎓 ${stus||'-'}</div></div>
           <div style="text-align:right"><div style="font-size:14px;font-weight:600;color:${color}">${l.hhmm}</div><div style="font-size:10px;color:var(--text3)">${l.duration}分钟${subT?' <span style="color:var(--red)">代</span>':''}</div></div>
         </div>
         ${l.note?`<div style="font-size:10px;color:var(--text3);margin-top:4px">📝 ${l.note}</div>`:''}
@@ -6244,9 +6272,10 @@ function openTeacherSchedule(teacherId){
     html+=singleLessons.map(l=>{
       const stus=l.studentIds.map(id=>DB.data.students[id]?.name).filter(Boolean).join('、');
       const subT=l.subTeacherId?DB.data.teachers[l.subTeacherId]:null;
+      const isCo = l.coTeacherId===teacherId;
       return `<div class="card" style="padding:9px 11px;border-left:3px solid ${color};cursor:pointer" onclick="openLessonDetail('${l.id}','${l.date}')">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
-          <div><div style="font-size:13px;font-weight:500">${l.title}</div><div style="font-size:10px;color:var(--text3)">${courseTypeTag(l.type)} ${fmtDate(l.date)} · 🎓 ${stus||'-'}</div></div>
+          <div><div style="font-size:13px;font-weight:500">${l.title} ${isCo?'<span style="font-size:9px;background:#8b5cf615;color:#8b5cf6;border-radius:4px;padding:1px 4px">合教(下半)</span>':''}</div><div style="font-size:10px;color:var(--text3)">${courseTypeTag(l.type)} ${fmtDate(l.date)} · 🎓 ${stus||'-'}</div></div>
           <div style="text-align:right"><div style="font-size:14px;font-weight:600;color:${color}">${l.hhmm}</div><div style="font-size:10px;color:var(--text3)">${l.duration}分钟${subT?' <span style="color:var(--red)">代</span>':''}</div></div>
         </div>
         ${l.note?`<div style="font-size:10px;color:var(--text3);margin-top:4px">📝 ${l.note}</div>`:''}
@@ -6260,9 +6289,10 @@ function openTeacherSchedule(teacherId){
     html+=rangeLessons.map(l=>{
       const stus=l.studentIds.map(id=>DB.data.students[id]?.name).filter(Boolean).join('、');
       const subT=l.subTeacherId?DB.data.teachers[l.subTeacherId]:null;
+      const isCo = l.coTeacherId===teacherId;
       return `<div class="card" style="padding:9px 11px;border-left:3px solid ${color};cursor:pointer" onclick="openLessonDetail('${l.id}','${l.date}')">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
-          <div><div style="font-size:13px;font-weight:500">${l.title}</div><div style="font-size:10px;color:var(--text3)">${courseTypeTag(l.type)} ${fmtDate(l.date)} · 🎓 ${stus||'-'}</div></div>
+          <div><div style="font-size:13px;font-weight:500">${l.title} ${isCo?'<span style="font-size:9px;background:#8b5cf615;color:#8b5cf6;border-radius:4px;padding:1px 4px">合教(下半)</span>':''}</div><div style="font-size:10px;color:var(--text3)">${courseTypeTag(l.type)} ${fmtDate(l.date)} · 🎓 ${stus||'-'}</div></div>
           <div style="text-align:right"><div style="font-size:14px;font-weight:600;color:${color}">${l.hhmm}</div><div style="font-size:10px;color:var(--text3)">${l.duration}分钟${subT?' <span style="color:var(--red)">代</span>':''}</div></div>
         </div>
         ${l.note?`<div style="font-size:10px;color:var(--text3);margin-top:4px">📝 ${l.note}</div>`:''}
@@ -6573,7 +6603,7 @@ function getExportFilters(){
 function filterLessonsForExport(filters){
   return Object.values(DB.data.lessons).filter(l=>{
     if(l._deleted) return false;
-    if(filters.teacherIds.length && !filters.teacherIds.includes(l.teacherId)) return false;
+    if(filters.teacherIds.length && !lessonAllTeacherIds(l).some(tid=>filters.teacherIds.includes(tid))) return false;
     if(filters.subjects.length && !filters.subjects.includes(l.title)) return false;
     if(filters.studentIds.length && !l.studentIds.some(id=>filters.studentIds.includes(id))) return false;
     return true;
@@ -6593,7 +6623,7 @@ function doExport(){
       const stus=l.studentIds.map(id=>DB.data.students[id]?.name).filter(Boolean).join(',');
       const marks=(l.marks||[]).map(m=>m.label).join(',');
       const timeStr=l.mode==='week'?(l.weekday==='all'?`每天 ${l.hhmm}`:`每周${dayNames[l.weekday]} ${l.hhmm}`):`${l.date||''} ${l.hhmm}`;
-      lessonRows.push([l.title,courseTypeLabel(l.type),t?.name||'',stus,l.mode==='week'?'周循环':'单次',timeStr,l.duration,marks,l.note||'']);
+      lessonRows.push([l.title,courseTypeLabel(l.type),lessonTeacherDisplay(l,{short:true}),stus,l.mode==='week'?'周循环':'单次',timeStr,l.duration,marks,l.note||'']);
     });
     const ws=XLSX.utils.aoa_to_sheet(lessonRows);
     XLSX.utils.book_append_sheet(wb,ws,'课次表');
@@ -6607,18 +6637,18 @@ function doExport(){
       const stus=s.studentIds.map(id=>DB.data.students[id]?.name).filter(Boolean).join(',');
       const dur=s.actualStart&&s.actualEnd?Math.round((s.actualEnd-s.actualStart)/60000):'';
       const status={'planned':'未开始','ongoing':'进行中','done':'已完成','absent':'缺勤','leave':'请假'}[s.status]||s.status;
-      sessRows.push([s.date,l?.title||'',t?.name||'',stus,s.planStart||'',s.actualStart?fmtTime(s.actualStart):'',s.actualEnd?fmtTime(s.actualEnd):'',dur,status]);
+      sessRows.push([s.date,l?.title||'',l?lessonTeacherDisplay(l,{short:true}):(t?.name||''),stus,s.planStart||'',s.actualStart?fmtTime(s.actualStart):'',s.actualEnd?fmtTime(s.actualEnd):'',dur,status]);
     });
     const ws=XLSX.utils.aoa_to_sheet(sessRows);
     XLSX.utils.book_append_sheet(wb,ws,'上课记录');
     sheetCount++;
   }
   if(filters.sheets.includes('teachers')){
-    const teacherIds=[...new Set(lessons.map(l=>l.teacherId))];
+    const teacherIds=[...new Set(lessons.flatMap(l=>lessonAllTeacherIds(l)))];
     const tRows=[['老师姓名','电话','课次数','学生数','周课时(分)']];
     teacherIds.forEach(tid=>{
       const t=DB.data.teachers[tid]; if(!t||t._deleted) return;
-      const tLessons=lessons.filter(l=>l.teacherId===tid);
+      const tLessons=lessons.filter(l=>lessonAllTeacherIds(l).includes(tid));
       const tStudents=new Set(); tLessons.forEach(l=>l.studentIds.forEach(id=>tStudents.add(id)));
       const tSessions=Object.values(DB.data.sessions).filter(s=>!s._deleted && s.teacherId===tid && s.status==='done');
       const weekMin=tSessions.reduce((sum,s)=>sum+((s.actualEnd||0)-(s.actualStart||0)),0)/60000;
@@ -6637,7 +6667,7 @@ function doExport(){
       const s=DB.data.students[sid]; if(!s||s._deleted) return;
       const sLessons=lessons.filter(l=>l.studentIds.includes(sid));
       const subjects=[...new Set(sLessons.map(l=>l.title))].join(',');
-      const teachers=[...new Set(sLessons.map(l=>DB.data.teachers[l.teacherId]?.name).filter(Boolean))].join(',');
+      const teachers=[...new Set(sLessons.flatMap(l=>lessonAllTeacherIds(l).map(tid=>DB.data.teachers[tid]?.name).filter(Boolean)))].join(',');
       let remaining=0;
       if(s.lessonTotals){
         Object.keys(s.lessonTotals).forEach(subj=>{
@@ -6853,7 +6883,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v23';
+    const sw=`const C='tw-cache-v24';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
