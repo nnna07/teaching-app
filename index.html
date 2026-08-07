@@ -3705,7 +3705,6 @@ function getRangeDates(start,end,freq,weeklyDay){
 let _batchAdjustSelected = new Set();
 function openBatchAdjust(){
   const lessons=Object.values(DB.data.lessons).filter(l=>!l._deleted);
-  const lessons=Object.values(DB.data.lessons).filter(l=>!l._deleted);
   if(lessons.length===0){ toast('没有可调整的课次'); return; }
   _batchAdjustSelected=new Set();
   renderBatchAdjustModal();
