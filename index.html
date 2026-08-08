@@ -542,7 +542,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.23.0';
+const APP_VERSION = 'v3.24.0';
 const APP_VERSION_DATE = '2026-08-08';
 
 const $ = s => document.querySelector(s);
@@ -1402,7 +1402,7 @@ function lessonListItem(l, dateStr){
         <button class="btn btn-sm btn-ghost" onclick="openLessonEdit('${l.id}')">编辑</button>
         <button class="btn btn-sm btn-ghost" onclick="openStudentPick('${l.id}')">学生</button>
         <button class="btn btn-sm btn-ghost" onclick="openMarks('${l.id}')">标注</button>
-        <button class="btn btn-sm btn-ghost" style="color:var(--primary);font-weight:600" onclick="quickAddNextLesson('${l.id}')">➕续排</button>
+        <button class="btn btn-sm btn-ghost" style="color:var(--primary);font-weight:600" onclick="openLessonAddNext('${l.id}')">➕续排</button>
         <button class="btn btn-sm btn-danger" onclick="delLesson('${l.id}')">删除</button>
       </div>
     </div>
@@ -1432,6 +1432,131 @@ function quickAddNextLesson(id){
   syncLessonSessions(nid);
   refreshCurrentView();
   toast(`✅ 已续排: ${fmtDate(nextDate)} ${l.hhmm}`);
+}
+
+/* ==================== 批量续排课次（选日期范围） ==================== */
+function openLessonAddNext(id){
+  const l=DB.data.lessons[id];
+  if(!l||l._deleted){ toast('课次不存在'); return; }
+  // 默认起始日期：单次课次+7天，周循环课次取下一个该星期
+  let startDate;
+  if(l.mode==='week' && l.weekday!=='all' && l.weekday!==undefined && l.weekday!==null){
+    const wd=typeof l.weekday==='number'?l.weekday:parseInt(l.weekday);
+    const d=new Date(); const curWd=d.getDay();
+    let diff=wd-curWd; if(diff<=0) diff+=7;
+    d.setDate(d.getDate()+diff);
+    startDate=fmtDate(d);
+  } else {
+    const d=new Date((l.date||todayStr())+'T00:00:00');
+    d.setDate(d.getDate()+7);
+    startDate=fmtDate(d);
+  }
+  // 默认结束日期：+8 周（56天）
+  const endDateObj=new Date(startDate+'T00:00:00');
+  endDateObj.setDate(endDateObj.getDate()+56);
+  const endDate=fmtDate(endDateObj);
+  const stus=(l.studentIds||[]).map(sid=>DB.data.students[sid]?.name).filter(Boolean);
+  const stuText=stus.length?`学生：${stus.join('、')}`:'未分配学生';
+  const modeText=l.mode==='week'?'每周循环':(l.mode==='range'?'日期段循环':'单次');
+  const html=`
+    <div style="padding:0 4px">
+      <div style="background:#f0f4ff;border-radius:8px;padding:10px;margin-bottom:12px;font-size:12px;line-height:1.6">
+        <div style="font-weight:600;margin-bottom:4px">📌 当前课次</div>
+        <div><b>${l.title||'(未命名)'}</b> · ${l.hhmm||''} · ${l.duration||60}分钟</div>
+        <div style="color:#666;margin-top:2px">${stuText} · ${modeText}</div>
+      </div>
+      <div style="background:#fef9c3;border-radius:8px;padding:8px;margin-bottom:10px;font-size:11px;color:#854d0e;line-height:1.5">
+        💡 <b>批量续排</b>：从起始日期到结束日期，每隔 7 天自动创建一个新课次（沿用当前课次的学生/老师/时间设置）
+      </div>
+      <div class="form-row">
+        <label>📅 起始日期 <span style="color:#999;font-weight:400">（首次续排日期）</span></label>
+        <input type="date" class="form-control" id="ban-from" value="${startDate}">
+      </div>
+      <div class="form-row">
+        <label>📅 结束日期 <span style="color:#999;font-weight:400">（含，每7天一次）</span></label>
+        <input type="date" class="form-control" id="ban-to" value="${endDate}">
+      </div>
+      <div style="background:#f0fdf4;border-radius:8px;padding:10px;margin-top:10px;font-size:12px;color:#166534;line-height:1.5">
+        <div>将创建 <b id="ban-count" style="font-size:15px;color:#059669">--</b> 个新课次</div>
+        <div id="ban-dates" style="font-size:10px;color:#666;margin-top:4px;max-height:60px;overflow-y:auto"></div>
+      </div>
+    </div>
+  `;
+  const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button>
+    <button class="btn btn-ghost" style="flex:1" onclick="closeModal();quickAddNextLesson('${id}')">⚡ 仅续排1次</button>
+    <button class="btn btn-primary" style="flex:2" onclick="doBatchAddNext('${id}')">📅 批量续排</button>`;
+  openModal(html,footer);
+  setSheetTitle('➕ 续排课次');
+  setTimeout(()=>{
+    const upd=()=>updateBanPreview();
+    const fromEl=$('#ban-from'), toEl=$('#ban-to');
+    if(fromEl) fromEl.addEventListener('change', upd);
+    if(toEl) toEl.addEventListener('change', upd);
+    upd();
+  },30);
+}
+
+function calcBatchAddDates(from, to){
+  const dates=[];
+  let cur=new Date(from+'T00:00:00');
+  const end=new Date(to+'T00:00:00');
+  if(isNaN(cur.getTime())||isNaN(end.getTime())) return dates;
+  while(cur<=end){
+    dates.push(fmtDate(cur));
+    cur.setDate(cur.getDate()+7);
+  }
+  return dates;
+}
+
+function updateBanPreview(){
+  const from=$('#ban-from')?.value;
+  const to=$('#ban-to')?.value;
+  const countEl=$('#ban-count');
+  const datesEl=$('#ban-dates');
+  if(!countEl||!datesEl) return;
+  if(!from||!to||to<from){
+    countEl.textContent='0';
+    datesEl.textContent='请选择有效的日期范围';
+    return;
+  }
+  const dates=calcBatchAddDates(from,to);
+  countEl.textContent=dates.length;
+  if(dates.length===0){
+    datesEl.textContent='无';
+  } else if(dates.length<=10){
+    datesEl.textContent=dates.join('、');
+  } else {
+    datesEl.textContent=dates.slice(0,5).join('、')+' … '+dates.slice(-3).join('、')+` （共 ${dates.length} 个）`;
+  }
+}
+
+function doBatchAddNext(id){
+  const l=DB.data.lessons[id];
+  if(!l||l._deleted){ toast('课次不存在'); return; }
+  const from=$('#ban-from')?.value;
+  const to=$('#ban-to')?.value;
+  if(!from){ toast('请选择起始日期'); return; }
+  if(!to){ toast('请选择结束日期'); return; }
+  if(to<from){ toast('结束日期不能早于起始日期'); return; }
+  const dates=calcBatchAddDates(from,to);
+  if(dates.length===0){ toast('日期范围内无内容'); return; }
+  if(dates.length>200){ toast('一次最多创建 200 个课次，请缩小日期范围'); return; }
+  const t=now();
+  let count=0;
+  dates.forEach(d=>{
+    const nid=uid();
+    DB.data.lessons[nid]={
+      ...JSON.parse(JSON.stringify(l)),
+      id:nid,date:d,weekday:dayOfWeek(d),mode:'single',batchId:undefined,
+      createdAt:t,updatedAt:t
+    };
+    syncLessonSessions(nid);
+    count++;
+  });
+  DB.save();
+  closeModal();
+  refreshCurrentView();
+  toast(`✅ 已批量续排 ${count} 个课次（${from} 至 ${to}）`);
 }
 
 /* ==================== 自动补全合教老师 ==================== */
@@ -1647,7 +1772,7 @@ function courseListItem(l, dateStr, subjColor){
         <button class="btn btn-sm btn-ghost" onclick="openLessonEdit('${l.id}')">编辑</button>
         <button class="btn btn-sm btn-ghost" onclick="openStudentPick('${l.id}')">学生</button>
         <button class="btn btn-sm btn-ghost" onclick="openMarks('${l.id}')">标注</button>
-        <button class="btn btn-sm btn-ghost" style="color:var(--primary);font-weight:600" onclick="quickAddNextLesson('${l.id}')">➕续排</button>
+        <button class="btn btn-sm btn-ghost" style="color:var(--primary);font-weight:600" onclick="openLessonAddNext('${l.id}')">➕续排</button>
         <button class="btn btn-sm btn-danger" onclick="delLesson('${l.id}')">删除</button>
       </div>
     </div>
@@ -3406,14 +3531,41 @@ function doSvExport(){
 }
 function doSvExportCapture(el,filename){
   // 给元素临时分配一个唯一ID以便在克隆文档中找到它
-  const tempId=el.id||'_capture_'+Date.now();
+  const origId=el.id;
+  const tempId=origId||'_capture_'+Date.now();
   el.id=tempId;
   // 记录原始滚动位置
   const scrollBackX=window.scrollX, scrollBackY=window.scrollY;
   window.scrollTo(0,0);
-  // 根据内容高度动态调整 scale，避免 canvas 超限
+  // 临时解除所有祖先的 overflow / maxHeight / maxWidth 限制
+  // 否则 scrollWidth/scrollHeight 测量的是被限制后的尺寸，导致导出图片被截断
+  const savedStyles=[];
+  let _p=el.parentElement;
+  while(_p){
+    savedStyles.push({
+      el:_p,
+      overflow:_p.style.overflow,
+      overflowX:_p.style.overflowX,
+      overflowY:_p.style.overflowY,
+      maxHeight:_p.style.maxHeight,
+      maxWidth:_p.style.maxWidth,
+      width:_p.style.width,
+      height:_p.style.height
+    });
+    _p.style.overflow='visible';
+    _p.style.overflowX='visible';
+    _p.style.overflowY='visible';
+    _p.style.maxHeight='none';
+    _p.style.maxWidth='none';
+    _p.style.width='auto';
+    _p.style.height='auto';
+    _p=_p.parentElement;
+  }
+  // 强制重新布局后再读取
+  void el.offsetHeight;
+  // 现在 scrollWidth/scrollHeight 才是真实内容尺寸
   const contentH=el.scrollHeight, contentW=el.scrollWidth;
-  const maxCanvasH=12000, maxCanvasW=8000;
+  const maxCanvasH=16000, maxCanvasW=16000;
   let scale=Math.min(maxCanvasH/contentH, maxCanvasW/contentW, 2);
   scale=Math.max(scale, 0.5);
   scale=Math.round(scale*100)/100;
@@ -3430,6 +3582,28 @@ function doSvExportCapture(el,filename){
     onclone:(doc)=>{
       const root=doc.getElementById(tempId);
       if(root){
+        // 修复所有祖先元素的 overflow 限制
+        let _a=root.parentElement;
+        while(_a){
+          _a.style.overflow='visible';
+          _a.style.overflowX='visible';
+          _a.style.overflowY='visible';
+          _a.style.maxHeight='none';
+          _a.style.maxWidth='none';
+          _a.style.width='auto';
+          _a.style.height='auto';
+          _a=_a.parentElement;
+        }
+        // 强制 root 宽度为真实内容宽度
+        root.style.width=contentW+'px';
+        root.style.maxWidth='none';
+        root.style.minWidth=contentW+'px';
+        // 强制表格按内容展开（不被 width:100% 压缩）
+        root.querySelectorAll('table').forEach(t=>{
+          t.style.width='auto';
+          t.style.minWidth='100%';
+          t.style.tableLayout='auto';
+        });
         // 递归修复所有子元素的 overflow/max-height 限制
         const fixElements=(node)=>{
           node.style.maxHeight='none';
@@ -3440,26 +3614,37 @@ function doSvExportCapture(el,filename){
           Array.from(node.children||[]).forEach(fixElements);
         };
         fixElements(root);
-        // 修复所有祖先元素的 overflow 限制
-        let p=root.parentElement;
-        while(p){
-          p.style.maxHeight='none';
-          p.style.overflow='visible';
-          p.style.overflowY='visible';
-          p=p.parentElement;
-        }
       }
     }
   }).then(canvas=>{
-    // 恢复原始ID
-    if(tempId.startsWith('_capture_')) el.id='';
+    // 恢复祖先样式
+    savedStyles.forEach(s=>{
+      s.el.style.overflow=s.overflow;
+      s.el.style.overflowX=s.overflowX;
+      s.el.style.overflowY=s.overflowY;
+      s.el.style.maxHeight=s.maxHeight;
+      s.el.style.maxWidth=s.maxWidth;
+      s.el.style.width=s.width;
+      s.el.style.height=s.height;
+    });
+    el.id=origId;
     window.scrollTo(scrollBackX,scrollBackY);
     canvas.toBlob(blob=>{
       downloadBlob(blob,filename);
       toast(`✅ 图片已保存 (${canvas.width}×${canvas.height})`);
     },'image/png');
   }).catch(err=>{
-    if(tempId.startsWith('_capture_')) el.id='';
+    // 恢复祖先样式
+    savedStyles.forEach(s=>{
+      s.el.style.overflow=s.overflow;
+      s.el.style.overflowX=s.overflowX;
+      s.el.style.overflowY=s.overflowY;
+      s.el.style.maxHeight=s.maxHeight;
+      s.el.style.maxWidth=s.maxWidth;
+      s.el.style.width=s.width;
+      s.el.style.height=s.height;
+    });
+    el.id=origId;
     window.scrollTo(scrollBackX,scrollBackY);
     toast('生成失败: '+err.message);
   });
@@ -3622,46 +3807,16 @@ function exportSvPersonReport(studentId){
   const el=holder.querySelector('#sv-person-report');
   toast('正在生成个人报告图片...');
   const filename=`督学报告_${stuName}_个人详情_${today}.png`;
-  const doCapture=()=>{
-    const contentH=el.scrollHeight, contentW=el.scrollWidth;
-    const maxCanvasH=12000, maxCanvasW=8000;
-    let scale=Math.min(maxCanvasH/contentH, maxCanvasW/contentW, 2);
-    scale=Math.max(scale, 0.5);
-    scale=Math.round(scale*100)/100;
-    html2canvas(el,{
-      scale:scale,backgroundColor:'#ffffff',useCORS:true,
-      width:contentW,height:contentH,
-      windowWidth:contentW,windowHeight:contentH,
-      scrollX:0,scrollY:0,
-      onclone:(doc)=>{
-        const root=doc.getElementById('sv-person-report');
-        if(root){
-          const fixElements=(el2)=>{
-            el2.style.maxHeight='none';
-            el2.style.height='auto';
-            el2.style.overflow='visible';
-            el2.style.overflowY='visible';
-            el2.style.overflowX='visible';
-            Array.from(el2.children||[]).forEach(fixElements);
-          };
-          fixElements(root);
-          let p=root.parentElement;
-          while(p){p.style.maxHeight='none';p.style.overflow='visible';p.style.overflowY='visible';p=p.parentElement;}
-        }
-      }
-    }).then(canvas=>{
-      canvas.toBlob(blob=>{ downloadBlob(blob,filename); toast(`✅ ${stuName}的个人报告已保存 (${canvas.width}×${canvas.height})`); holder.remove(); },'image/png');
-    }).catch(err=>{
-      toast('生成失败: '+err.message); holder.remove();
-    });
-  };
   if(typeof html2canvas==='undefined'){
     const script=document.createElement('script');
     script.src='https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
-    script.onload=doCapture;
+    script.onload=()=>{ doSvExportCapture(el,filename); };
     script.onerror=()=>{ toast('图片生成库加载失败'); holder.remove(); };
     document.head.appendChild(script);
-  } else { doCapture(); }
+  } else { doSvExportCapture(el,filename); }
+  // 兜底清理：doSvExportCapture 完成时会自动清理
+  const removeHolder=()=>{ if(holder.parentNode) holder.remove(); };
+  setTimeout(removeHolder,15000);
 }
 
 /* ==================== 课次编辑 ==================== */
@@ -4857,7 +5012,7 @@ function openLessonDetail(lessonId,dateStr){
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
       <button class="btn btn-ghost" style="flex:1" onclick="closeModal();openStudentPick('${l.id}')">增减学生</button>
       <button class="btn btn-ghost" style="flex:1" onclick="closeModal();openMarks('${l.id}')">标注</button>
-      <button class="btn btn-primary" style="flex:1" onclick="closeModal();quickAddNextLesson('${l.id}')">➕续排下节</button>
+      <button class="btn btn-primary" style="flex:1" onclick="closeModal();openLessonAddNext('${l.id}')">➕续排下节</button>
       <button class="btn btn-danger" style="flex:1" onclick="closeModal();delLesson('${l.id}')">删除</button>
     </div>
   `;
@@ -5628,7 +5783,7 @@ function openStudentView(studentId){
       <div style="display:flex;gap:4px;margin-top:5px" onclick="event.stopPropagation()">
         <button class="btn btn-sm btn-ghost" style="flex:1;font-size:10px;padding:3px 0" onclick="toggleLessonDone('${l.id}','${dateStr}')">${sgDone?'取消':'完成'}</button>
         <button class="btn btn-sm btn-ghost" style="flex:1;font-size:10px;padding:3px 0" onclick="closeModal();openLessonEdit('${l.id}')">编辑</button>
-        <button class="btn btn-sm btn-ghost" style="flex:1;font-size:10px;padding:3px 0;color:var(--primary);font-weight:600" onclick="closeModal();quickAddNextLesson('${l.id}')">➕续排</button>
+        <button class="btn btn-sm btn-ghost" style="flex:1;font-size:10px;padding:3px 0;color:var(--primary);font-weight:600" onclick="closeModal();openLessonAddNext('${l.id}')">➕续排</button>
         <button class="btn btn-sm btn-danger" style="flex:1;font-size:10px;padding:3px 0" onclick="delLesson('${l.id}')">删除</button>
       </div>
     </div>`;
@@ -5788,38 +5943,10 @@ function exportParentReport(studentId){
   }
 }
 function doExportParentReport(el){
-  const contentH=el.scrollHeight, contentW=el.scrollWidth;
-  const maxCanvasH=12000, maxCanvasW=8000;
-  let scale=Math.min(maxCanvasH/contentH, maxCanvasW/contentW, 2);
-  scale=Math.max(scale, 0.5);
-  scale=Math.round(scale*100)/100;
-  html2canvas(el,{
-    scale:scale,backgroundColor:'#ffffff',useCORS:true,
-    width:contentW,height:contentH,
-    windowWidth:contentW,windowHeight:contentH,
-    scrollX:0,scrollY:0,
-    onclone:(doc)=>{
-      const root=doc.getElementById('parent-report-content');
-      if(root){
-        const fixElements=(el2)=>{
-          el2.style.maxHeight='none';el2.style.height='auto';
-          el2.style.overflow='visible';el2.style.overflowY='visible';el2.style.overflowX='visible';
-          Array.from(el2.children||[]).forEach(fixElements);
-        };
-        fixElements(root);
-        let p=root.parentElement;
-        while(p){p.style.maxHeight='none';p.style.overflow='visible';p.style.overflowY='visible';p=p.parentElement;}
-      }
-    }
-  }).then(canvas=>{
-    canvas.toBlob(blob=>{
-      const filename=`家长报告_${DB.data.students[$('#sheet').dataset.studentId]?.name||''}_${todayStr()}.png`;
-      downloadBlob(blob,filename);
-      toast(`✅ 图片已保存 (${canvas.width}×${canvas.height})`);
-    },'image/png');
-  }).catch(err=>{
-    toast('生成失败: '+err.message);
-  });
+  // 统一走 doSvExportCapture（自动解除父元素 overflow + 动态 scale）
+  const stuName=DB.data.students[$('#sheet').dataset.studentId]?.name||'';
+  const filename=`家长报告_${stuName}_${todayStr()}.png`;
+  doSvExportCapture(el,filename);
 }
 
 /* ==================== 上课记录 - 番茄TODO风格 ==================== */
@@ -7211,7 +7338,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v28';
+    const sw=`const C='tw-cache-v29';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
