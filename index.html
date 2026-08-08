@@ -542,8 +542,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.22.2';
-const APP_VERSION_DATE = '2026-08-07';
+const APP_VERSION = 'v3.23.0';
+const APP_VERSION_DATE = '2026-08-08';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -1402,10 +1402,64 @@ function lessonListItem(l, dateStr){
         <button class="btn btn-sm btn-ghost" onclick="openLessonEdit('${l.id}')">编辑</button>
         <button class="btn btn-sm btn-ghost" onclick="openStudentPick('${l.id}')">学生</button>
         <button class="btn btn-sm btn-ghost" onclick="openMarks('${l.id}')">标注</button>
+        <button class="btn btn-sm btn-ghost" style="color:var(--primary);font-weight:600" onclick="quickAddNextLesson('${l.id}')">➕续排</button>
         <button class="btn btn-sm btn-danger" onclick="delLesson('${l.id}')">删除</button>
       </div>
     </div>
   </div>`;
+}
+
+/* ==================== 快速续排课次 ==================== */
+function quickAddNextLesson(id){
+  const l=DB.data.lessons[id]; if(!l||l._deleted){ toast('课次不存在'); return; }
+  const t=now();
+  // 计算下个日期：单次课+7天，周循环取下次该星期
+  let nextDate;
+  if(l.mode==='week' && l.weekday!=='all'){
+    const wd=typeof l.weekday==='number'?l.weekday:parseInt(l.weekday);
+    const d=new Date(); const curWd=d.getDay();
+    let diff=wd-curWd; if(diff<=0) diff+=7;
+    d.setDate(d.getDate()+diff);
+    nextDate=fmtDate(d);
+  } else {
+    const d=new Date((l.date||todayStr())+'T00:00:00');
+    d.setDate(d.getDate()+7);
+    nextDate=fmtDate(d);
+  }
+  const nid=uid();
+  DB.data.lessons[nid]={id:nid,title:l.title,type:l.type,teacherId:l.teacherId,coTeacherId:l.coTeacherId||'',subTeacherId:'',studentIds:[...l.studentIds],marks:JSON.parse(JSON.stringify(l.marks||[])),mode:'single',date:nextDate,weekday:dayOfWeek(nextDate),hhmm:l.hhmm,duration:l.duration,note:l.note||'',createdAt:t,updatedAt:t};
+  DB.save();
+  syncLessonSessions(nid);
+  refreshCurrentView();
+  toast(`✅ 已续排: ${fmtDate(nextDate)} ${l.hhmm}`);
+}
+
+/* ==================== 自动补全合教老师 ==================== */
+function autoFillCoTeachers(){
+  const teachers=Object.values(DB.data.teachers).filter(t=>!t._deleted);
+  const teacherNameMap={};
+  teachers.forEach(t=>{ teacherNameMap[t.name]=t.id; });
+  let fixed=0;
+  Object.values(DB.data.lessons).forEach(l=>{
+    if(l._deleted||!l.note) return;
+    if(l.coTeacherId) return; // 已有合教老师，跳过
+    // 从备注中提取"X老师"模式
+    const matches=[...l.note.matchAll(/([\u4e00-\u9fa5]{1,4})老师/g)];
+    if(matches.length<2) return; // 至少提到两个老师
+    // 去重并匹配到已有老师
+    const foundNames=[...new Set(matches.map(m=>m[1]+'老师'))];
+    const foundIds=foundNames.map(n=>teacherNameMap[n]).filter(Boolean);
+    if(foundIds.length<2) return;
+    // 主老师已匹配，找另一个作为合教老师
+    const otherId=foundIds.find(id=>id!==l.teacherId);
+    if(!otherId) return;
+    l.coTeacherId=otherId;
+    l.updatedAt=now();
+    syncLessonSessions(l.id);
+    fixed++;
+  });
+  if(fixed>0){ DB.save(); }
+  return fixed;
 }
 
 /* ==================== 课程管理 ==================== */
@@ -1593,6 +1647,7 @@ function courseListItem(l, dateStr, subjColor){
         <button class="btn btn-sm btn-ghost" onclick="openLessonEdit('${l.id}')">编辑</button>
         <button class="btn btn-sm btn-ghost" onclick="openStudentPick('${l.id}')">学生</button>
         <button class="btn btn-sm btn-ghost" onclick="openMarks('${l.id}')">标注</button>
+        <button class="btn btn-sm btn-ghost" style="color:var(--primary);font-weight:600" onclick="quickAddNextLesson('${l.id}')">➕续排</button>
         <button class="btn btn-sm btn-danger" onclick="delLesson('${l.id}')">删除</button>
       </div>
     </div>
@@ -4802,6 +4857,7 @@ function openLessonDetail(lessonId,dateStr){
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
       <button class="btn btn-ghost" style="flex:1" onclick="closeModal();openStudentPick('${l.id}')">增减学生</button>
       <button class="btn btn-ghost" style="flex:1" onclick="closeModal();openMarks('${l.id}')">标注</button>
+      <button class="btn btn-primary" style="flex:1" onclick="closeModal();quickAddNextLesson('${l.id}')">➕续排下节</button>
       <button class="btn btn-danger" style="flex:1" onclick="closeModal();delLesson('${l.id}')">删除</button>
     </div>
   `;
@@ -5572,6 +5628,7 @@ function openStudentView(studentId){
       <div style="display:flex;gap:4px;margin-top:5px" onclick="event.stopPropagation()">
         <button class="btn btn-sm btn-ghost" style="flex:1;font-size:10px;padding:3px 0" onclick="toggleLessonDone('${l.id}','${dateStr}')">${sgDone?'取消':'完成'}</button>
         <button class="btn btn-sm btn-ghost" style="flex:1;font-size:10px;padding:3px 0" onclick="closeModal();openLessonEdit('${l.id}')">编辑</button>
+        <button class="btn btn-sm btn-ghost" style="flex:1;font-size:10px;padding:3px 0;color:var(--primary);font-weight:600" onclick="closeModal();quickAddNextLesson('${l.id}')">➕续排</button>
         <button class="btn btn-sm btn-danger" style="flex:1;font-size:10px;padding:3px 0" onclick="delLesson('${l.id}')">删除</button>
       </div>
     </div>`;
@@ -7154,7 +7211,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v27';
+    const sw=`const C='tw-cache-v28';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
@@ -7219,7 +7276,17 @@ function checkVersionUpdate(){
   const last=localStorage.getItem('tw_last_version');
   const cur=APP_VERSION;
   if(last && last!==cur){
-    setTimeout(()=>toast(`✨ 已更新到 ${cur}`),1200);
+    // 版本更新时自动补全合教老师
+    try{
+      const fixed=autoFillCoTeachers();
+      if(fixed>0){
+        setTimeout(()=>toast(`✨ 已更新到 ${cur}，自动补全 ${fixed} 个课次的合教老师`),1200);
+      } else {
+        setTimeout(()=>toast(`✨ 已更新到 ${cur}`),1200);
+      }
+    }catch(e){
+      setTimeout(()=>toast(`✨ 已更新到 ${cur}`),1200);
+    }
   }
   localStorage.setItem('tw_last_version',cur);
 }
