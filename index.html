@@ -542,7 +542,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.22.1';
+const APP_VERSION = 'v3.22.2';
 const APP_VERSION_DATE = '2026-08-07';
 
 const $ = s => document.querySelector(s);
@@ -3350,62 +3350,61 @@ function doSvExport(){
   }
 }
 function doSvExportCapture(el,filename){
-  // 先解除所有父级 overflow/max-height 限制，避免被 modal 滚动裁断
-  const restoreList=[];
-  let p=el.parentElement;
-  while(p && p!==document.body){
-    const cs=getComputedStyle(p);
-    const oy=cs.overflowY, ov=cs.overflow, mh=cs.maxHeight;
-    if(oy==='auto'||oy==='hidden'||oy==='scroll'||ov==='auto'||ov==='hidden'||ov==='scroll'){
-      restoreList.push({el:p,ov:ov,ovy:oy,key:'ov'});
-      p.style.overflow='visible';
-      p.style.overflowY='visible';
-    }
-    if(mh && mh!=='none'){
-      restoreList.push({el:p,mh:mh,key:'mh'});
-      p.style.maxHeight='none';
-    }
-    p=p.parentElement;
-  }
-  // 把元素移到 body 直接子级，截取全高
-  const next=el.nextSibling;
-  const parent=el.parentElement;
-  document.body.appendChild(el);
-  el.style.position='fixed';
-  el.style.left='-99999px';
-  el.style.top='0';
-  el.style.maxHeight='none';
-  el.style.height='auto';
-  el.style.overflow='visible';
+  // 给元素临时分配一个唯一ID以便在克隆文档中找到它
+  const tempId=el.id||'_capture_'+Date.now();
+  el.id=tempId;
+  // 记录原始滚动位置
   const scrollBackX=window.scrollX, scrollBackY=window.scrollY;
   window.scrollTo(0,0);
+  // 根据内容高度动态调整 scale，避免 canvas 超限
+  const contentH=el.scrollHeight, contentW=el.scrollWidth;
+  const maxCanvasH=12000, maxCanvasW=8000;
+  let scale=Math.min(maxCanvasH/contentH, maxCanvasW/contentW, 2);
+  scale=Math.max(scale, 0.5);
+  scale=Math.round(scale*100)/100;
   html2canvas(el,{
-    scale:1.75,
+    scale:scale,
     backgroundColor:'#ffffff',
     useCORS:true,
-    width:el.scrollWidth,
-    height:el.scrollHeight,
-    windowWidth:el.scrollWidth,
-    windowHeight:el.scrollHeight,
+    width:contentW,
+    height:contentH,
+    windowWidth:contentW,
+    windowHeight:contentH,
     scrollX:0,
     scrollY:0,
     onclone:(doc)=>{
-      const cloned=doc.getElementById('sv-report-content');
-      if(cloned){cloned.style.maxHeight='none';cloned.style.overflow='visible';cloned.style.height='auto';cloned.style.position='static';}
+      const root=doc.getElementById(tempId);
+      if(root){
+        // 递归修复所有子元素的 overflow/max-height 限制
+        const fixElements=(node)=>{
+          node.style.maxHeight='none';
+          node.style.height='auto';
+          node.style.overflow='visible';
+          node.style.overflowY='visible';
+          node.style.overflowX='visible';
+          Array.from(node.children||[]).forEach(fixElements);
+        };
+        fixElements(root);
+        // 修复所有祖先元素的 overflow 限制
+        let p=root.parentElement;
+        while(p){
+          p.style.maxHeight='none';
+          p.style.overflow='visible';
+          p.style.overflowY='visible';
+          p=p.parentElement;
+        }
+      }
     }
   }).then(canvas=>{
-    if(parent){if(next) parent.insertBefore(el,next); else parent.appendChild(el);}
-    el.style.position=''; el.style.left=''; el.style.top=''; el.style.maxHeight=''; el.style.height=''; el.style.overflow='';
-    restoreList.forEach(r=>{if(r.key==='ov'){r.el.style.overflow=r.ov;r.el.style.overflowY=r.ovy;}else if(r.key==='mh'){r.el.style.maxHeight=r.mh;}});
+    // 恢复原始ID
+    if(tempId.startsWith('_capture_')) el.id='';
     window.scrollTo(scrollBackX,scrollBackY);
     canvas.toBlob(blob=>{
       downloadBlob(blob,filename);
-      toast('✅ 图片已保存');
+      toast(`✅ 图片已保存 (${canvas.width}×${canvas.height})`);
     },'image/png');
   }).catch(err=>{
-    if(parent){if(next) parent.insertBefore(el,next); else parent.appendChild(el);}
-    el.style.position=''; el.style.left=''; el.style.top=''; el.style.maxHeight=''; el.style.height=''; el.style.overflow='';
-    restoreList.forEach(r=>{if(r.key==='ov'){r.el.style.overflow=r.ov;r.el.style.overflowY=r.ovy;}else if(r.key==='mh'){r.el.style.maxHeight=r.mh;}});
+    if(tempId.startsWith('_capture_')) el.id='';
     window.scrollTo(scrollBackX,scrollBackY);
     toast('生成失败: '+err.message);
   });
@@ -3568,27 +3567,36 @@ function exportSvPersonReport(studentId){
   const el=holder.querySelector('#sv-person-report');
   toast('正在生成个人报告图片...');
   const filename=`督学报告_${stuName}_个人详情_${today}.png`;
-  const doCapture=()=>{ const restoreList2=[]; let p2=el.parentElement;
-    while(p2 && p2!==document.body){
-      const cs2=getComputedStyle(p2);
-      const oy2=cs2.overflowY,ov2=cs2.overflow;
-      if(oy2==='auto'||oy2==='hidden'||oy2==='scroll'||ov2==='auto'||ov2==='hidden'||ov2==='scroll'){
-        restoreList2.push({el:p2,ov:ov2,ovy:oy2});
-        p2.style.overflow='visible';p2.style.overflowY='visible';
-      }
-      p2=p2.parentElement;
-    }
+  const doCapture=()=>{
+    const contentH=el.scrollHeight, contentW=el.scrollWidth;
+    const maxCanvasH=12000, maxCanvasW=8000;
+    let scale=Math.min(maxCanvasH/contentH, maxCanvasW/contentW, 2);
+    scale=Math.max(scale, 0.5);
+    scale=Math.round(scale*100)/100;
     html2canvas(el,{
-      scale:1.75,backgroundColor:'#ffffff',useCORS:true,
-      width:el.scrollWidth,height:el.scrollHeight,
-      windowWidth:el.scrollWidth,windowHeight:el.scrollHeight,
+      scale:scale,backgroundColor:'#ffffff',useCORS:true,
+      width:contentW,height:contentH,
+      windowWidth:contentW,windowHeight:contentH,
       scrollX:0,scrollY:0,
-      onclone:(doc)=>{const c=doc.getElementById('sv-person-report');if(c){c.style.maxHeight='none';c.style.overflow='visible';}}
+      onclone:(doc)=>{
+        const root=doc.getElementById('sv-person-report');
+        if(root){
+          const fixElements=(el2)=>{
+            el2.style.maxHeight='none';
+            el2.style.height='auto';
+            el2.style.overflow='visible';
+            el2.style.overflowY='visible';
+            el2.style.overflowX='visible';
+            Array.from(el2.children||[]).forEach(fixElements);
+          };
+          fixElements(root);
+          let p=root.parentElement;
+          while(p){p.style.maxHeight='none';p.style.overflow='visible';p.style.overflowY='visible';p=p.parentElement;}
+        }
+      }
     }).then(canvas=>{
-      restoreList2.forEach(r=>{r.el.style.overflow=r.ov;r.el.style.overflowY=r.ovy;});
-      canvas.toBlob(blob=>{ downloadBlob(blob,filename); toast('✅ '+stuName+'的个人报告已保存'); holder.remove(); },'image/png');
+      canvas.toBlob(blob=>{ downloadBlob(blob,filename); toast(`✅ ${stuName}的个人报告已保存 (${canvas.width}×${canvas.height})`); holder.remove(); },'image/png');
     }).catch(err=>{
-      restoreList2.forEach(r=>{r.el.style.overflow=r.ov;r.el.style.overflowY=r.ovy;});
       toast('生成失败: '+err.message); holder.remove();
     });
   };
@@ -3606,6 +3614,7 @@ function openLessonEdit(id, prefill={}){
   const l = id?DB.data.lessons[id]:null;
   const teachers = Object.values(DB.data.teachers).filter(t=>!t._deleted);
   if(teachers.length===0){ toast('请先添加老师'); switchTab('mine'); openTeacherEdit(); return; }
+  const students = Object.values(DB.data.students).filter(s=>!s._deleted);
   const subOpts = `<option value="">无代课</option>`+teachers.map(t=>`<option value="${t.id}" ${l?.subTeacherId===t.id?'selected':''}>${t.name}</option>`).join('');
   const coOpts = `<option value="">无</option>`+teachers.map(t=>`<option value="${t.id}" ${l?.coTeacherId===t.id?'selected':''}>${t.name}</option>`).join('');
   const html = `
@@ -3658,6 +3667,9 @@ function openLessonEdit(id, prefill={}){
     <div class="form-row"><label>开始时间 <span class="req">*</span></label><input type="time" class="form-control" id="f-hhmm" value="${l?.hhmm||'09:00'}"></div>
     <div class="form-row"><label>时长(分钟)</label><input type="number" class="form-control" id="f-dur" value="${l?.duration||60}" min="15" step="15"></div>
     <div class="form-row"><label>备注</label><textarea class="form-control" id="f-note">${l?.note||''}</textarea></div>
+    <div class="form-row"><label>学生</label>
+      ${students.length?`<div class="pick-list" id="f-students">${students.map(s=>{const in_=l?.studentIds?.includes(s.id);return `<label class="pick-item"><input type="checkbox" data-id="${s.id}" ${in_?'checked':''}><span class="nm">${s.name}${s.note?' ('+s.note+')':''}</span></label>`;}).join('')}</div>`:'<div style="font-size:12px;color:var(--text3);padding:8px">暂无学生，请先在「我的」页面添加学生</div>'}
+    </div>
   `;
   const footer = `<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="saveLesson('${id||''}')">保存</button>`;
   openModal(html, footer);
@@ -4023,6 +4035,7 @@ function saveLesson(id){
   const hhmm=$('#f-hhmm').value||'09:00';
   const duration=parseInt($('#f-dur').value)||60;
   const note=$('#f-note').value.trim();
+  const selectedStudentIds=[...$$('#f-students input:checked')].map(c=>c.dataset.id);
   const t=now();
 
   // 日期范围：批量创建单次课次（编辑时也支持：删除原课次并替换为批量课次）
@@ -4037,7 +4050,7 @@ function saveLesson(id){
     const dates=getRangeDates(start,end,freq,weeklyDay);
     if(dates.length===0){toast('所选范围内没有符合条件的日期');return;}
     const batchId=uid();
-    const baseStudentIds=id?(DB.data.lessons[id]?.studentIds||[]):[];
+    const baseStudentIds=selectedStudentIds;
     const baseMarks=id?(DB.data.lessons[id]?.marks||[]):[];
     const baseSubTeacherId=id?(DB.data.lessons[id]?.subTeacherId||''):'';
     const baseCoTeacherId=id?(DB.data.lessons[id]?.coTeacherId||''):'';
@@ -4066,12 +4079,13 @@ function saveLesson(id){
   if(id){
     data.subTeacherId=$('#f-sub-teacher').value;
     data.coTeacherId=$('#f-co-teacher').value;
+    data.studentIds=selectedStudentIds;
     DB.data.lessons[id]={...DB.data.lessons[id],...data};
     syncLessonSessions(id);
   }
   else{
     const nid=uid();
-    DB.data.lessons[nid]={id:nid,studentIds:[],marks:[],createdAt:t,...data,subTeacherId:$('#f-sub-teacher').value,coTeacherId:$('#f-co-teacher').value};
+    DB.data.lessons[nid]={id:nid,studentIds:selectedStudentIds,marks:[],createdAt:t,...data,subTeacherId:$('#f-sub-teacher').value,coTeacherId:$('#f-co-teacher').value};
   }
   DB.save(); closeModal(); refreshCurrentView(); toast('已保存');
 }
@@ -5717,11 +5731,34 @@ function exportParentReport(studentId){
   }
 }
 function doExportParentReport(el){
-  html2canvas(el,{scale:2,backgroundColor:'#ffffff',useCORS:true}).then(canvas=>{
+  const contentH=el.scrollHeight, contentW=el.scrollWidth;
+  const maxCanvasH=12000, maxCanvasW=8000;
+  let scale=Math.min(maxCanvasH/contentH, maxCanvasW/contentW, 2);
+  scale=Math.max(scale, 0.5);
+  scale=Math.round(scale*100)/100;
+  html2canvas(el,{
+    scale:scale,backgroundColor:'#ffffff',useCORS:true,
+    width:contentW,height:contentH,
+    windowWidth:contentW,windowHeight:contentH,
+    scrollX:0,scrollY:0,
+    onclone:(doc)=>{
+      const root=doc.getElementById('parent-report-content');
+      if(root){
+        const fixElements=(el2)=>{
+          el2.style.maxHeight='none';el2.style.height='auto';
+          el2.style.overflow='visible';el2.style.overflowY='visible';el2.style.overflowX='visible';
+          Array.from(el2.children||[]).forEach(fixElements);
+        };
+        fixElements(root);
+        let p=root.parentElement;
+        while(p){p.style.maxHeight='none';p.style.overflow='visible';p.style.overflowY='visible';p=p.parentElement;}
+      }
+    }
+  }).then(canvas=>{
     canvas.toBlob(blob=>{
       const filename=`家长报告_${DB.data.students[$('#sheet').dataset.studentId]?.name||''}_${todayStr()}.png`;
       downloadBlob(blob,filename);
-      toast('✅ 图片已保存');
+      toast(`✅ 图片已保存 (${canvas.width}×${canvas.height})`);
     },'image/png');
   }).catch(err=>{
     toast('生成失败: '+err.message);
@@ -7117,7 +7154,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v26';
+    const sw=`const C='tw-cache-v27';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
