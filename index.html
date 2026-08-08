@@ -542,7 +542,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.24.0';
+const APP_VERSION = 'v3.24.1';
 const APP_VERSION_DATE = '2026-08-08';
 
 const $ = s => document.querySelector(s);
@@ -3530,46 +3530,62 @@ function doSvExport(){
   }
 }
 function doSvExportCapture(el,filename){
-  // 给元素临时分配一个唯一ID以便在克隆文档中找到它
-  const origId=el.id;
-  const tempId=origId||'_capture_'+Date.now();
-  el.id=tempId;
   // 记录原始滚动位置
   const scrollBackX=window.scrollX, scrollBackY=window.scrollY;
   window.scrollTo(0,0);
-  // 临时解除所有祖先的 overflow / maxHeight / maxWidth 限制
-  // 否则 scrollWidth/scrollHeight 测量的是被限制后的尺寸，导致导出图片被截断
-  const savedStyles=[];
-  let _p=el.parentElement;
-  while(_p){
-    savedStyles.push({
-      el:_p,
-      overflow:_p.style.overflow,
-      overflowX:_p.style.overflowX,
-      overflowY:_p.style.overflowY,
-      maxHeight:_p.style.maxHeight,
-      maxWidth:_p.style.maxWidth,
-      width:_p.style.width,
-      height:_p.style.height
-    });
-    _p.style.overflow='visible';
-    _p.style.overflowX='visible';
-    _p.style.overflowY='visible';
-    _p.style.maxHeight='none';
-    _p.style.maxWidth='none';
-    _p.style.width='auto';
-    _p.style.height='auto';
-    _p=_p.parentElement;
-  }
-  // 强制重新布局后再读取
-  void el.offsetHeight;
-  // 现在 scrollWidth/scrollHeight 才是真实内容尺寸
-  const contentH=el.scrollHeight, contentW=el.scrollWidth;
+  // 关键：手机端 modal 容器只有 ~360px，报告 width:100% 被压缩后 scrollWidth 也只有 360px
+  // 必须把元素克隆到一个固定宽度（800px）的离屏容器里，让 table 完全展开后再截图
+  const CAPTURE_W=800;
+  const clone=el.cloneNode(true);
+  clone.removeAttribute('id');
+  // 离屏渲染容器
+  const offscreen=document.createElement('div');
+  offscreen.style.cssText=`position:fixed;left:-99999px;top:0;width:${CAPTURE_W}px;background:#fff;color:#1a1a1a;z-index:-1;visibility:visible;pointer-events:none`;
+  offscreen.appendChild(clone);
+  document.body.appendChild(offscreen);
+  // 强制克隆体宽度为 CAPTURE_W，并清理所有 overflow 限制
+  clone.style.width=CAPTURE_W+'px';
+  clone.style.maxWidth=CAPTURE_W+'px';
+  clone.style.minWidth=CAPTURE_W+'px';
+  clone.style.boxSizing='border-box';
+  clone.style.height='auto';
+  clone.style.maxHeight='none';
+  clone.style.overflow='visible';
+  clone.style.overflowX='visible';
+  clone.style.overflowY='visible';
+  // 强制表格按内容自然展开（不被 width:100% 压缩）
+  clone.querySelectorAll('table').forEach(t=>{
+    t.style.width='auto';
+    t.style.minWidth='100%';
+    t.style.maxWidth='none';
+    t.style.tableLayout='auto';
+  });
+  // 强制 grid 容器按比例扩展（4列等）
+  clone.querySelectorAll('[style*="display:grid"]').forEach(g=>{
+    g.style.width='100%';
+    g.style.maxWidth='none';
+  });
+  // 递归修复所有子元素的 overflow 限制
+  const fixAll=(node)=>{
+    const cs=node.style;
+    if(cs.maxHeight && cs.maxHeight!=='none') cs.maxHeight='none';
+    if(cs.height && cs.height!=='auto' && node!==clone) cs.height='auto';
+    if(cs.overflow && cs.overflow!=='visible') cs.overflow='visible';
+    if(cs.overflowY && cs.overflowY!=='visible') cs.overflowY='visible';
+    if(cs.overflowX && cs.overflowX!=='visible') cs.overflowX='visible';
+    Array.from(node.children||[]).forEach(fixAll);
+  };
+  fixAll(clone);
+  // 强制重新布局
+  void clone.offsetHeight;
+  // 测量真实尺寸
+  const contentH=clone.scrollHeight, contentW=clone.scrollWidth;
+  // 动态 scale：保证不超 canvas 上限，又不至于太小
   const maxCanvasH=16000, maxCanvasW=16000;
   let scale=Math.min(maxCanvasH/contentH, maxCanvasW/contentW, 2);
   scale=Math.max(scale, 0.5);
   scale=Math.round(scale*100)/100;
-  html2canvas(el,{
+  html2canvas(clone,{
     scale:scale,
     backgroundColor:'#ffffff',
     useCORS:true,
@@ -3578,73 +3594,16 @@ function doSvExportCapture(el,filename){
     windowWidth:contentW,
     windowHeight:contentH,
     scrollX:0,
-    scrollY:0,
-    onclone:(doc)=>{
-      const root=doc.getElementById(tempId);
-      if(root){
-        // 修复所有祖先元素的 overflow 限制
-        let _a=root.parentElement;
-        while(_a){
-          _a.style.overflow='visible';
-          _a.style.overflowX='visible';
-          _a.style.overflowY='visible';
-          _a.style.maxHeight='none';
-          _a.style.maxWidth='none';
-          _a.style.width='auto';
-          _a.style.height='auto';
-          _a=_a.parentElement;
-        }
-        // 强制 root 宽度为真实内容宽度
-        root.style.width=contentW+'px';
-        root.style.maxWidth='none';
-        root.style.minWidth=contentW+'px';
-        // 强制表格按内容展开（不被 width:100% 压缩）
-        root.querySelectorAll('table').forEach(t=>{
-          t.style.width='auto';
-          t.style.minWidth='100%';
-          t.style.tableLayout='auto';
-        });
-        // 递归修复所有子元素的 overflow/max-height 限制
-        const fixElements=(node)=>{
-          node.style.maxHeight='none';
-          node.style.height='auto';
-          node.style.overflow='visible';
-          node.style.overflowY='visible';
-          node.style.overflowX='visible';
-          Array.from(node.children||[]).forEach(fixElements);
-        };
-        fixElements(root);
-      }
-    }
+    scrollY:0
   }).then(canvas=>{
-    // 恢复祖先样式
-    savedStyles.forEach(s=>{
-      s.el.style.overflow=s.overflow;
-      s.el.style.overflowX=s.overflowX;
-      s.el.style.overflowY=s.overflowY;
-      s.el.style.maxHeight=s.maxHeight;
-      s.el.style.maxWidth=s.maxWidth;
-      s.el.style.width=s.width;
-      s.el.style.height=s.height;
-    });
-    el.id=origId;
+    offscreen.remove();
     window.scrollTo(scrollBackX,scrollBackY);
     canvas.toBlob(blob=>{
       downloadBlob(blob,filename);
       toast(`✅ 图片已保存 (${canvas.width}×${canvas.height})`);
     },'image/png');
   }).catch(err=>{
-    // 恢复祖先样式
-    savedStyles.forEach(s=>{
-      s.el.style.overflow=s.overflow;
-      s.el.style.overflowX=s.overflowX;
-      s.el.style.overflowY=s.overflowY;
-      s.el.style.maxHeight=s.maxHeight;
-      s.el.style.maxWidth=s.maxWidth;
-      s.el.style.width=s.width;
-      s.el.style.height=s.height;
-    });
-    el.id=origId;
+    offscreen.remove();
     window.scrollTo(scrollBackX,scrollBackY);
     toast('生成失败: '+err.message);
   });
@@ -7338,7 +7297,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v29';
+    const sw=`const C='tw-cache-v30';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
