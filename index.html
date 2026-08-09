@@ -542,8 +542,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.24.1';
-const APP_VERSION_DATE = '2026-08-08';
+const APP_VERSION = 'v3.25.0';
+const APP_VERSION_DATE = '2026-08-09';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -1384,14 +1384,15 @@ function lessonListItem(l, dateStr){
   const marks = (l.marks||[]).map(m=>`<span class="mk" style="background:${m.color}20;color:${m.color}">${m.label}</span>`).join('');
   const color = teacherColor(l.teacherId);
   const done = isLessonDone(l.id, dateStr);
-  return `<div class="lesson-item" style="border-left-color:${color};${done?'opacity:.75':''}">
+  const swapPending = hasMark(l.id,'待调课');
+  return `<div class="lesson-item" style="border-left-color:${swapPending?'#ea580c':color};${done?'opacity:.75':''}${swapPending?';background:#fff7ed':''}">
     <div class="l-timeblock" style="background:linear-gradient(135deg,${color}15,${color}08)">
       <div class="ltb-time" style="color:${color}">${l.hhmm}</div>
       <div class="ltb-dur">${l.duration}分钟</div>
     </div>
     <div class="l-body">
       <div class="l-top">
-        <div><div class="l-title">${l.title}${done?' <span style="color:var(--green);font-size:12px">✓</span>':''}</div><div class="l-sub">${t&&!t._deleted?'👤 '+lessonTeacherDisplay(l,{short:true}):''}${subT?'<span style="color:var(--red)">→代课 '+subT.name+'</span>':''} · ${timeStr}</div></div>
+        <div><div class="l-title">${l.title}${done?' <span style="color:var(--green);font-size:12px">✓</span>':''}${swapPending?' <span style="color:#ea580c;font-size:11px;font-weight:600">⏸待调课</span>':''}</div><div class="l-sub">${t&&!t._deleted?'👤 '+lessonTeacherDisplay(l,{short:true}):''}${subT?'<span style="color:var(--red)">→代课 '+subT.name+'</span>':''} · ${timeStr}</div></div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">${courseTypeTag(l.type)}${modeTag}${batchTag}</div>
       </div>
       <div class="l-stus">${stus.length?stus.map(s=>`<span class="stu" onclick="event.stopPropagation();openStudentView('${s.id}')">${s.name}</span>`).join(''):'<span style="color:var(--text3)">未分配学生</span>'}</div>
@@ -1402,6 +1403,8 @@ function lessonListItem(l, dateStr){
         <button class="btn btn-sm btn-ghost" onclick="openLessonEdit('${l.id}')">编辑</button>
         <button class="btn btn-sm btn-ghost" onclick="openStudentPick('${l.id}')">学生</button>
         <button class="btn btn-sm btn-ghost" onclick="openMarks('${l.id}')">标注</button>
+        <button class="btn btn-sm btn-ghost" style="${swapPending?'color:#ea580c;font-weight:600':'color:var(--text3)'}" onclick="toggleSwapMark('${l.id}')">${swapPending?'⏸取消':'⏸待调'}</button>
+        <button class="btn btn-sm btn-ghost" style="color:var(--primary);font-weight:600" onclick="openSwapLesson('${l.id}')">🔄对调</button>
         <button class="btn btn-sm btn-ghost" style="color:var(--primary);font-weight:600" onclick="openLessonAddNext('${l.id}')">➕续排</button>
         <button class="btn btn-sm btn-danger" onclick="delLesson('${l.id}')">删除</button>
       </div>
@@ -1734,6 +1737,7 @@ function courseListItem(l, dateStr, subjColor){
   const color = teacherColor(l.teacherId);
   const done = isLessonDone(l.id, dateStr);
   const orphan = isOrphanLesson(l);
+  const swapPending = hasMark(l.id,'待调课');
   const orphanTags = [];
   if(!t || t._deleted) orphanTags.push('<span style="color:var(--red);font-size:10px">老师已删除</span>');
   if(l.studentIds.length>0 && stus.length===0) orphanTags.push('<span style="color:var(--red);font-size:10px">学生已删除</span>');
@@ -1741,17 +1745,17 @@ function courseListItem(l, dateStr, subjColor){
 
   if(courseBatchMode){
     const checked = _batchSelected.has(l.id) ? 'checked' : '';
-    return `<div class="batch-item" style="border-left-color:${orphan?'var(--text3)':color};${orphan?'background:#f9fafb;opacity:.85':''}">
+    return `<div class="batch-item" style="border-left-color:${swapPending?'#ea580c':(orphan?'var(--text3)':color)};${orphan?'background:#f9fafb;opacity:.85':(swapPending?'background:#fff7ed':'')}">
       <input type="checkbox" class="batch-check" data-id="${l.id}" ${checked} onchange="toggleBatchLesson('${l.id}')">
       <div style="flex:1;min-width:0">
-        <div style="font-size:13px;font-weight:500">${l.title} ${orphanTagHtml}${done?'<span style="color:var(--green);font-size:11px">✓</span>':''}</div>
+        <div style="font-size:13px;font-weight:500">${l.title} ${orphanTagHtml}${done?'<span style="color:var(--green);font-size:11px">✓</span>':''}${swapPending?'<span style="color:#ea580c;font-size:10px">⏸待调</span>':''}</div>
         <div style="font-size:11px;color:var(--text3)">${lessonTimeRange(l)} · ${l.duration}分钟 · 👤 ${t&&!t._deleted?lessonTeacherDisplay(l,{short:true}):'老师已删除'}${subT?' → 代课 '+subT.name:''}${stus.length?' · 🎓 '+stus.map(s=>s.name).join('、'):(l.studentIds.length?' · 🎓 学生已删除':' · 🎓 未分配学生')}</div>
         <div style="margin-top:3px">${modeTag}${batchTag}${courseTypeTag(l.type)}${marks}</div>
       </div>
     </div>`;
   }
 
-  return `<div class="lesson-item" style="border-left-color:${orphan?'var(--text3)':color};${done||orphan?'opacity:.75':''};${orphan?'background:#f9fafb':''}">
+  return `<div class="lesson-item" style="border-left-color:${swapPending?'#ea580c':(orphan?'var(--text3)':color)};${done||orphan?'opacity:.75':''};${orphan?'background:#f9fafb':(swapPending?'background:#fff7ed':'')}">
     <div class="l-timeblock" style="background:linear-gradient(135deg,${orphan?'#e5e7eb':color+'15'},${orphan?'#f3f4f6':color+'08'})">
       <div class="ltb-time" style="color:${orphan?'var(--text3)':color}">${l.hhmm}</div>
       <div class="ltb-dur">${l.duration}分</div>
@@ -1759,7 +1763,7 @@ function courseListItem(l, dateStr, subjColor){
     <div class="l-body">
       <div class="l-top">
         <div>
-          <div class="l-title">${l.title}${orphanTagHtml}${done?' <span style="color:var(--green);font-size:12px">✓</span>':''}</div>
+          <div class="l-title">${l.title}${orphanTagHtml}${done?' <span style="color:var(--green);font-size:12px">✓</span>':''}${swapPending?' <span style="color:#ea580c;font-size:11px;font-weight:600">⏸待调课</span>':''}</div>
           <div class="l-sub">${t&&!t._deleted?'👤 '+lessonTeacherDisplay(l,{short:true}):'<span style="color:var(--red)">👤 老师已删除</span>'}${subT?'<span style="color:var(--red)">→代课 '+subT.name+'</span>':''} · ${timeStr} · ${lessonTimeRange(l)}</div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">${courseTypeTag(l.type)}${modeTag}${batchTag}</div>
@@ -1772,6 +1776,8 @@ function courseListItem(l, dateStr, subjColor){
         <button class="btn btn-sm btn-ghost" onclick="openLessonEdit('${l.id}')">编辑</button>
         <button class="btn btn-sm btn-ghost" onclick="openStudentPick('${l.id}')">学生</button>
         <button class="btn btn-sm btn-ghost" onclick="openMarks('${l.id}')">标注</button>
+        <button class="btn btn-sm btn-ghost" style="${swapPending?'color:#ea580c;font-weight:600':'color:var(--text3)'}" onclick="toggleSwapMark('${l.id}')">${swapPending?'⏸取消':'⏸待调'}</button>
+        <button class="btn btn-sm btn-ghost" style="color:var(--primary);font-weight:600" onclick="openSwapLesson('${l.id}')">🔄对调</button>
         <button class="btn btn-sm btn-ghost" style="color:var(--primary);font-weight:600" onclick="openLessonAddNext('${l.id}')">➕续排</button>
         <button class="btn btn-sm btn-danger" onclick="delLesson('${l.id}')">删除</button>
       </div>
@@ -4361,6 +4367,7 @@ const MARK_PRESETS = [
   {label:'已缴费',color:'#059669'},
   {label:'试听课',color:'#d97706'},
   {label:'补课',color:'#dc2626'},
+  {label:'待调课',color:'#ea580c'},
   {label:'重点',color:'#7c3aed'},
   {label:'已完成',color:'#0891b2'},
 ];
@@ -4402,6 +4409,91 @@ function removeMark(lessonId,idx){
   const l=DB.data.lessons[lessonId];
   l.marks.splice(idx,1); l.updatedAt=now(); DB.save();
   openMarks(lessonId);
+}
+
+/* ==================== 待调课 & 对调课次 ==================== */
+function hasMark(lessonId,label){
+  const l=DB.data.lessons[lessonId];
+  return !!(l&&l.marks&&l.marks.some(m=>m.label===label));
+}
+function toggleSwapMark(lessonId){
+  const l=DB.data.lessons[lessonId]; if(!l||l._deleted) return;
+  if(!l.marks) l.marks=[];
+  const idx=l.marks.findIndex(m=>m.label==='待调课');
+  if(idx>=0){
+    l.marks.splice(idx,1);
+    toast('已取消待调课标记');
+  } else {
+    l.marks.push({label:'待调课',color:'#ea580c'});
+    toast('⏸ 已标记待调课');
+  }
+  l.updatedAt=now(); DB.save();
+  refreshCurrentView();
+}
+function openSwapLesson(lessonId){
+  const l1=DB.data.lessons[lessonId]; if(!l1||l1._deleted) return;
+  if(l1.mode==='week'){ toast('周循环课次请先编辑为单次再对调'); return; }
+  const oldDate1=l1.date;
+  // 列出所有其他单次课次（按日期排序，标出待调课的）
+  const others=Object.values(DB.data.lessons)
+    .filter(l=>!l._deleted&&l.id!==lessonId&&l.mode==='single'&&l.date)
+    .sort((a,b)=>a.date.localeCompare(b.date));
+  if(!others.length){ toast('没有可对调的单次课次'); return; }
+  const html=`
+    <div style="font-size:12px;color:var(--text2);margin-bottom:8px">
+      将「<b>${l1.title}</b>」(${fmtDate(oldDate1)} ${l1.hhmm})的<b>日期</b>与以下课次互换（时间不变）：
+    </div>
+    <div style="max-height:380px;overflow-y:auto">
+      ${others.map(l=>{
+        const c=teacherColor(l.teacherId);
+        const t=DB.data.teachers[l.teacherId];
+        const stus=l.studentIds.map(id=>DB.data.students[id]).filter(s=>s&&!s._deleted);
+        const swp=hasMark(l.id,'待调课');
+        const done=isLessonDone(l.id,l.date);
+        return `<div class="lesson-item" style="border-left-color:${c};${swp?'background:#fff7ed;':''}cursor:pointer;margin-bottom:6px" onclick="doSwapLesson('${lessonId}','${l.id}')">
+          <div class="l-timeblock" style="background:linear-gradient(135deg,${c}15,${c}08)">
+            <div class="ltb-time" style="color:${c}">${l.hhmm}</div>
+            <div class="ltb-dur">${l.duration}分</div>
+          </div>
+          <div class="l-body">
+            <div class="l-top">
+              <div><div class="l-title">${l.title} ${done?'<span style="color:var(--green);font-size:12px">✓</span>':''} ${swp?'<span style="color:#ea580c;font-size:11px">⏸待调</span>':''}</div>
+              <div class="l-sub">${fmtDate(l.date)} ${t&&!t._deleted?'👤 '+t.name:''}</div></div>
+            </div>
+            <div class="l-stus">${stus.length?stus.map(s=>`<span class="stu">${s.name}</span>`).join(''):'<span style="color:var(--text3)">未分配</span>'}</div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-top:8px">💡 点击课次即可对调日期，两节课的时间(几点)保持不变</div>
+  `;
+  openModal(html); setSheetTitle('对调课次');
+}
+function doSwapLesson(id1,id2){
+  const l1=DB.data.lessons[id1], l2=DB.data.lessons[id2];
+  if(!l1||!l2||l1._deleted||l2._deleted) return;
+  if(!confirm(`确认对调？\n「${l1.title}」${fmtDate(l1.date)} ↔ 「${l2.title}」${fmtDate(l2.date)}`)) return;
+  const oldDate1=l1.date, oldDate2=l2.date;
+  // 交换日期
+  l1.date=oldDate2; l2.date=oldDate1;
+  // 交换 weekday
+  const tmpWd=l1.weekday; l1.weekday=l2.weekday; l2.weekday=tmpWd;
+  // 更新关联 session 的日期
+  Object.values(DB.data.sessions).forEach(s=>{
+    if(s._deleted) return;
+    if(s.lessonId===id1 && s.date===oldDate1){ s.date=oldDate2; s.updatedAt=now(); }
+    else if(s.lessonId===id2 && s.date===oldDate2){ s.date=oldDate1; s.updatedAt=now(); }
+  });
+  // 移除"待调课"标注
+  [l1,l2].forEach(l=>{
+    if(l.marks){
+      const idx=l.marks.findIndex(m=>m.label==='待调课');
+      if(idx>=0) l.marks.splice(idx,1);
+    }
+    l.updatedAt=now();
+  });
+  DB.save(); closeModal(); refreshCurrentView();
+  toast(`✅ 已对调: ${l1.title}→${fmtDate(l1.date)}, ${l2.title}→${fmtDate(l2.date)}`);
 }
 
 /* ==================== 时间表 ==================== */
@@ -4971,6 +5063,8 @@ function openLessonDetail(lessonId,dateStr){
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
       <button class="btn btn-ghost" style="flex:1" onclick="closeModal();openStudentPick('${l.id}')">增减学生</button>
       <button class="btn btn-ghost" style="flex:1" onclick="closeModal();openMarks('${l.id}')">标注</button>
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal();toggleSwapMark('${l.id}')">${hasMark(l.id,'待调课')?'取消待调':'⏸待调课'}</button>
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal();openSwapLesson('${l.id}')">🔄对调</button>
       <button class="btn btn-primary" style="flex:1" onclick="closeModal();openLessonAddNext('${l.id}')">➕续排下节</button>
       <button class="btn btn-danger" style="flex:1" onclick="closeModal();delLesson('${l.id}')">删除</button>
     </div>
@@ -7297,7 +7391,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v30';
+    const sw=`const C='tw-cache-v31';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
