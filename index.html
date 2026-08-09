@@ -542,7 +542,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.25.0';
+const APP_VERSION = 'v3.26.0';
 const APP_VERSION_DATE = '2026-08-09';
 
 const $ = s => document.querySelector(s);
@@ -7391,7 +7391,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v31';
+    const sw=`const C='tw-cache-v32';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
@@ -7443,11 +7443,219 @@ self.addEventListener('fetch',e=>{
   }
 }
 
+/* ==================== 一次性调课迁移 2026-08-09 ==================== */
+function runSchedulingMigration(){
+  const MIGRATION_KEY='tw_migration_20260809';
+  if(localStorage.getItem(MIGRATION_KEY)) return; // 已执行过
+
+  const teachers=Object.values(DB.data.teachers).filter(t=>!t._deleted);
+  const allLessons=Object.values(DB.data.lessons).filter(l=>!l._deleted);
+  const log=[];
+  let hasChange=false;
+
+  // ===== 1. 查找郝老师 =====
+  let hao=teachers.find(t=>t.name.includes('郝'));
+  if(!hao){ log.push('⚠️ 未找到郝老师，跳过新高一历史课和语文托班'); }
+
+  // ===== 2. 查找/创建少杰老师 =====
+  let shaojie=teachers.find(t=>t.name.includes('少杰'));
+  if(!shaojie && hao){
+    const sid=uid(),t=now();
+    DB.data.teachers[sid]={id:sid,name:'少杰老师',phone:'',createdAt:t,updatedAt:t};
+    shaojie=DB.data.teachers[sid];
+    log.push('✅ 已创建少杰老师');
+    hasChange=true;
+  }
+
+  // ===== 3. 创建新高一历史课 8/10-8/14 =====
+  if(hao){
+    const histDates=['2026-08-10','2026-08-11','2026-08-12','2026-08-13','2026-08-14'];
+    // 检查是否已存在（防重复）
+    const existing=histDates.filter(d=>allLessons.some(l=>
+      l.title.includes('高一')&&l.title.includes('历史')&&l.date===d
+    ));
+    const toCreate=histDates.filter(d=>!existing.includes(d));
+    if(toCreate.length>0){
+      const batchId=uid();
+      for(const date of toCreate){
+        const lid=uid(),t=now();
+        DB.data.lessons[lid]={
+          id:lid,title:'新高一历史',type:'班课',
+          teacherId:hao.id,coTeacherId:'',subTeacherId:'',
+          studentIds:[],marks:[],mode:'single',
+          date:date,weekday:dayOfWeek(date),
+          hhmm:'13:30',duration:90,note:'',
+          batchId:batchId,createdAt:t,updatedAt:t
+        };
+      }
+      log.push(`✅ 创建新高一历史课 ${toCreate.length} 节 (8/10-8/14 13:30)`);
+      hasChange=true;
+    } else if(existing.length===histDates.length){
+      log.push('⏭️ 新高一历史课已存在，跳过');
+    }
+  }
+
+  // ===== 4. 五年级语文托班加少杰老师为助教 =====
+  if(shaojie && hao){
+    // 多级匹配：郝老师 + 语文 + (五/托/新五)
+    let targets=allLessons.filter(l=>{
+      const tch=DB.data.teachers[l.teacherId];
+      return tch&&!tch._deleted&&tch.name.includes('郝')&&
+             l.title.includes('语文')&&
+             (l.title.includes('五')||l.title.includes('托'));
+    });
+    // 如果没匹配到，放宽到郝老师+语文
+    if(targets.length===0){
+      targets=allLessons.filter(l=>{
+        const tch=DB.data.teachers[l.teacherId];
+        return tch&&!tch._deleted&&tch.name.includes('郝')&&l.title.includes('语文');
+      });
+    }
+    // 再放宽到郝老师+托班
+    if(targets.length===0){
+      targets=allLessons.filter(l=>{
+        const tch=DB.data.teachers[l.teacherId];
+        return tch&&!tch._deleted&&tch.name.includes('郝')&&
+               (l.title.includes('托')||l.title.includes('语文'));
+      });
+    }
+    let added=0;
+    for(const l of targets){
+      if(l.coTeacherId===shaojie.id) continue; // 已设置
+      l.coTeacherId=shaojie.id;
+      l.updatedAt=now();
+      syncLessonSessions(l.id);
+      added++;
+    }
+    if(added>0){
+      log.push(`✅ ${added} 节语文托班添加少杰老师为助教`);
+      hasChange=true;
+    } else if(targets.length>0){
+      log.push('⏭️ 语文托班已设置少杰老师，跳过');
+    } else {
+      log.push('⚠️ 未找到匹配的语文托班课次');
+    }
+  }
+
+  // ===== 5. 初三英语：删除8/15-8/20，从8/20补齐到20节 =====
+  let engPool=allLessons.filter(l=>l.title.includes('初三')&&l.title.includes('英语'));
+  if(engPool.length===0){
+    engPool=allLessons.filter(l=>l.title.includes('英语')&&l.title.includes('初三'));
+  }
+  if(engPool.length===0){
+    engPool=allLessons.filter(l=>l.title.includes('英语')&&l.title.includes('初三'));
+  }
+  // 最终兜底：含英语的课次
+  if(engPool.length===0){
+    engPool=allLessons.filter(l=>l.title.includes('英语'));
+    if(engPool.length>0) log.push('⚠️ 未找到"初三英语"，使用含"英语"的课次');
+  }
+
+  if(engPool.length>0){
+    // 模板：8/15之前最近的一节单次课
+    const beforeBreak=engPool
+      .filter(l=>l.mode==='single'&&l.date&&l.date<'2026-08-15')
+      .sort((a,b)=>b.date.localeCompare(a.date));
+    const template=beforeBreak[0]||engPool.find(l=>l.mode==='single')||engPool[0];
+
+    // 分析排课星期模式
+    const scheduledWeekdays=new Set();
+    engPool.forEach(l=>{ if(l.mode==='single'&&l.date) scheduledWeekdays.add(dayOfWeek(l.date)); });
+    const isWeekdaysOnly=[...scheduledWeekdays].every(w=>w>=1&&w<=5)&&scheduledWeekdays.size>0;
+
+    // 删除8/15-8/20
+    const toDelete=engPool.filter(l=>
+      l.mode==='single'&&l.date&&l.date>='2026-08-15'&&l.date<='2026-08-20'
+    );
+    let deleted=0;
+    for(const l of toDelete){
+      l._deleted=true; l.updatedAt=now(); deleted++;
+      Object.values(DB.data.sessions).forEach(s=>{
+        if(!s._deleted&&s.lessonId===l.id){ s._deleted=true; s.updatedAt=now(); }
+      });
+    }
+    if(deleted>0){
+      log.push(`✅ 删除初三英语 ${deleted} 节 (8/15-8/20)`);
+      hasChange=true;
+    }
+
+    // 统计剩余
+    const remaining=Object.values(DB.data.lessons).filter(l=>
+      !l._deleted&&l.title.includes('初三')&&l.title.includes('英语')
+    );
+    // 兜底计数
+    if(remaining.length===0){
+      const engRemaining=Object.values(DB.data.lessons).filter(l=>
+        !l._deleted&&l.title.includes('英语')
+      );
+      log.push(`ℹ️ 初三英语剩余 ${engRemaining.length} 节`);
+    }
+
+    const targetTotal=20;
+    const needed=Math.max(0,targetTotal-remaining.length);
+
+    if(needed>0&&template){
+      const existingDates=new Set(remaining.filter(l=>l.mode==='single'&&l.date).map(l=>l.date));
+      let currentDate=new Date('2026-08-20T00:00:00');
+      let created=0;
+      const newBatchId=uid();
+      let safety=200;
+
+      while(created<needed&&safety-->0){
+        const dateStr=fmtDate(currentDate);
+        const wd=dayOfWeek(dateStr);
+
+        if(!existingDates.has(dateStr)){
+          if(!isWeekdaysOnly||(wd>=1&&wd<=5)){
+            const lid=uid(),t=now();
+            DB.data.lessons[lid]={
+              id:lid,title:template.title,type:template.type,
+              teacherId:template.teacherId,
+              coTeacherId:template.coTeacherId||'',subTeacherId:'',
+              studentIds:[...template.studentIds],marks:[],
+              mode:'single',date:dateStr,weekday:wd,
+              hhmm:template.hhmm,duration:template.duration,
+              note:template.note||'',batchId:newBatchId,
+              createdAt:t,updatedAt:t
+            };
+            existingDates.add(dateStr);
+            created++;
+          }
+        }
+        currentDate.setDate(currentDate.getDate()+1);
+      }
+      if(created>0){
+        log.push(`✅ 补排初三英语 ${created} 节 (从8/20起，共${remaining.length+created}节)`);
+        hasChange=true;
+      }
+    } else if(needed===0){
+      log.push(`⏭️ 初三英语已有 ${remaining.length} 节，无需补排`);
+    }
+  } else {
+    log.push('⚠️ 未找到初三英语课次');
+  }
+
+  // ===== 保存 =====
+  if(hasChange){
+    DB.save();
+    if(typeof refreshCurrentView==='function') refreshCurrentView();
+  }
+  localStorage.setItem(MIGRATION_KEY,'1');
+
+  // ===== 提示 =====
+  const msg=log.join('\n');
+  console.log('[调课迁移]\n'+msg);
+  if(hasChange){
+    setTimeout(()=>toast('✅ 调课已完成，详见控制台'),1500);
+  }
+}
+
 /* ==================== 初始化 ==================== */
 function init(){
   DB.init();
   setupPWA();
   checkVersionUpdate();
+  runSchedulingMigration();
   // 不再自动填充示例数据，新用户从空数据开始，方便云端同步
   switchTab('lessons');
   setSyncInd(false);
