@@ -7448,8 +7448,11 @@ function runSchedulingMigration(){
   const MIGRATION_KEY='tw_migration_20260809';
   if(localStorage.getItem(MIGRATION_KEY)) return; // 已执行过
 
-  const teachers=Object.values(DB.data.teachers).filter(t=>!t._deleted);
-  const allLessons=Object.values(DB.data.lessons).filter(l=>!l._deleted);
+  // 防御性检查
+  if(!DB||!DB.data||!DB.data.teachers||!DB.data.lessons) return;
+
+  const teachers=Object.values(DB.data.teachers).filter(t=>t&&t._deleted!==true);
+  const allLessons=Object.values(DB.data.lessons).filter(l=>l&&l._deleted!==true);
   const log=[];
   let hasChange=false;
 
@@ -7638,7 +7641,6 @@ function runSchedulingMigration(){
   // ===== 保存 =====
   if(hasChange){
     DB.save();
-    if(typeof refreshCurrentView==='function') refreshCurrentView();
   }
   localStorage.setItem(MIGRATION_KEY,'1');
 
@@ -7655,7 +7657,7 @@ function init(){
   DB.init();
   setupPWA();
   checkVersionUpdate();
-  runSchedulingMigration();
+  try{ runSchedulingMigration(); }catch(e){ console.error('[调课迁移]出错:',e); }
   // 不再自动填充示例数据，新用户从空数据开始，方便云端同步
   switchTab('lessons');
   setSyncInd(false);
