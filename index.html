@@ -545,7 +545,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.26.1';
+const APP_VERSION = 'v3.26.2';
 const APP_VERSION_DATE = '2026-08-11';
 
 const $ = s => document.querySelector(s);
@@ -7393,9 +7393,19 @@ function setupPWA(){
   const manifest={name:'教学管理工作台',short_name:'教学台',start_url:'.',display:'standalone',background_color:'#f3f4f6',theme_color:'#4f46e5',icons:[{src:'data:image/svg+xml,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192"><rect width="192" height="192" rx="40" fill="#4f46e5"/><text x="96" y="130" font-size="100" text-anchor="middle" fill="white">📚</text></svg>`),sizes:'192x192',type:'image/svg+xml',purpose:'any maskable'}]};
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
-    // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v33';
-self.addEventListener('install',e=>self.skipWaiting());
+    // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
+    const sw=`const C='tw-cache-v34';
+const PRECACHE_URLS=['./','./index.html'];
+self.addEventListener('install',e=>{
+  self.skipWaiting();
+  // 安装时预缓存 HTML，确保离线可用
+  e.waitUntil(
+    caches.open(C).then(c=>c.addAll(PRECACHE_URLS).catch(()=>{})).then(()=>{
+      // 同时尝试获取最新版本并更新缓存
+      return fetch('./',{cache:'no-store'}).then(r=>r.ok&&caches.open(C).then(c=>c.put('./',r.clone()))).catch(()=>{});
+    })
+  );
+});
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
     caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==C).map(k=>caches.delete(k))))
@@ -7403,18 +7413,25 @@ self.addEventListener('activate',e=>e.waitUntil(
 ));
 self.addEventListener('fetch',e=>{
   const req=e.request;
-  // HTML 导航请求：network-first，自动拉取最新版本
+  // HTML 导航请求：stale-while-revalidate（先返回缓存，后台静默更新）
   if(req.mode==='navigate' || (req.method==='GET' && req.headers.get('accept')&&req.headers.get('accept').includes('text/html'))){
     e.respondWith(
-      fetch(req,{cache:'no-store'}).then(resp=>{
-        const cp=resp.clone();
-        caches.open(C).then(c=>c.put(req,cp));
-        return resp;
-      }).catch(()=>caches.match(req).then(r=>r||caches.match('./')||caches.match('.')))
+      caches.match(req).then(cached=>{
+        // 后台静默拉取最新版本
+        const networkUpdate=fetch(req,{cache:'no-store'}).then(resp=>{
+          if(resp&&resp.ok){
+            const cp=resp.clone();
+            caches.open(C).then(c=>c.put(req,cp));
+          }
+          return resp;
+        }).catch(()=>null);
+        // 优先返回缓存（离线可用），缓存为空时走网络
+        return cached || networkUpdate || caches.match('./') || new Response('离线缓存不可用，请检查网络',{status:503,headers:{'Content-Type':'text/plain;charset=utf-8'}});
+      })
     );
     return;
   }
-  // 其他资源：cache-first
+  // 其他资源：cache-first（图片/字体等已缓存的离线可用）
   e.respondWith(
     caches.match(req).then(r=>r||fetch(req).then(resp=>{
       const cp=resp.clone();
