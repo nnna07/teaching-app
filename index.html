@@ -7,6 +7,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="教学台">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>教学管理工作台</title>
 <link rel="manifest" id="manifest">
 <style>
@@ -542,8 +545,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.26.0';
-const APP_VERSION_DATE = '2026-08-09';
+const APP_VERSION = 'v3.26.1';
+const APP_VERSION_DATE = '2026-08-11';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -7391,7 +7394,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: HTML 走 network-first（自动更新），其他资源走 cache-first
-    const sw=`const C='tw-cache-v32';
+    const sw=`const C='tw-cache-v33';
 self.addEventListener('install',e=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(
   self.clients.claim().then(()=>
@@ -7403,7 +7406,7 @@ self.addEventListener('fetch',e=>{
   // HTML 导航请求：network-first，自动拉取最新版本
   if(req.mode==='navigate' || (req.method==='GET' && req.headers.get('accept')&&req.headers.get('accept').includes('text/html'))){
     e.respondWith(
-      fetch(req).then(resp=>{
+      fetch(req,{cache:'no-store'}).then(resp=>{
         const cp=resp.clone();
         caches.open(C).then(c=>c.put(req,cp));
         return resp;
@@ -7666,7 +7669,7 @@ function checkVersionUpdate(){
   const last=localStorage.getItem('tw_last_version');
   const cur=APP_VERSION;
   if(last && last!==cur){
-    // 版本更新时自动补全合教老师
+    // 版本更新：自动补全合教老师
     try{
       const fixed=autoFillCoTeachers();
       if(fixed>0){
@@ -7677,6 +7680,21 @@ function checkVersionUpdate(){
     }catch(e){
       setTimeout(()=>toast(`✨ 已更新到 ${cur}`),1200);
     }
+    // 自动清理 SW 缓存 + 注销 SW + 强制重载（确保用户拿到最新版本）
+    localStorage.setItem('tw_last_version',cur);
+    if('caches' in window){
+      caches.keys().then(names=>{ names.forEach(n=>caches.delete(n)); }).catch(()=>{});
+    }
+    if('serviceWorker' in navigator){
+      navigator.serviceWorker.getRegistrations().then(regs=>{
+        regs.forEach(r=>r.unregister());
+      }).catch(()=>{}).finally(()=>{
+        setTimeout(()=>location.reload(true), 600);
+      });
+    } else {
+      setTimeout(()=>location.reload(true), 600);
+    }
+    return; // 重载后重新执行，不继续
   }
   localStorage.setItem('tw_last_version',cur);
 }
