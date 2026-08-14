@@ -545,7 +545,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.26.2';
+const APP_VERSION = 'v3.27.0';
 const APP_VERSION_DATE = '2026-08-11';
 
 const $ = s => document.querySelector(s);
@@ -3118,10 +3118,15 @@ function openSvExport(){
         <option value="all">📊 全部统计（多人汇总+个人明细）</option>
         <option value="summary">📈 仅多人汇总统计</option>
         <option value="personal">👤 仅个人明细</option>
+        <option value="daily">📅 当天详情（一天记录列表）</option>
         <option value="heatmap">🔥 热力图日历（贡献图风格）</option>
         <option value="weekcards">📅 周报卡片（按周汇总）</option>
         <option value="personal_detail">👤 个人详情报告（每人一张完整卡片）</option>
       </select>
+    </div>
+    <div class="form-row" id="sv-exp-daily-row" style="display:none">
+      <label>选择日期</label>
+      <input type="date" class="form-control" id="sv-exp-daily-date" value="${today}" onchange="updateSvExportPreview()">
     </div>
     <div id="sv-exp-preview" style="margin-top:8px"></div>`;
   const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button><button class="btn btn-primary" style="flex:2" onclick="doSvExport()">💾 保存为图片</button>`;
@@ -3171,6 +3176,8 @@ function getSvExportData(){
 function updateSvExportPreview(){
   const customRow=$('#sv-exp-custom');
   if(customRow) customRow.style.display = ($('#sv-exp-range')?.value==='custom')?'':'none';
+  const dailyRow=$('#sv-exp-daily-row');
+  if(dailyRow) dailyRow.style.display = ($('#sv-exp-mode')?.value==='daily')?'':'none';
   const {list,from,to,subject,ckType}=getSvExportData();
   const mode=$('#sv-exp-mode')?.value||'all';
   const subjectLabel=subject==='all'?'全部科目':subject;
@@ -3268,6 +3275,77 @@ function updateSvExportPreview(){
         </tr>`;
       });
       html+=`</tbody></table>`;
+    }
+    html+=`</div>`;
+  }
+  // 当天详情模式（列表格式，按学生分组）
+  if(mode==='daily'){
+    const dailyDate=$('#sv-exp-daily-date')?.value || todayStr();
+    const dayRecords=list.filter(s=>s.date===dailyDate).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
+    const dow=['日','一','二','三','四','五','六'][dayOfWeek(dailyDate)];
+    html+=`<div><div style="font-size:13px;font-weight:600;margin-bottom:6px">📅 ${dailyDate}（周${dow}）详情 · 共${dayRecords.length}条记录</div>`;
+    if(dayRecords.length===0){
+      html+=`<div style="color:#999;font-size:12px;padding:8px;text-align:center">该日期暂无打卡记录</div>`;
+    } else {
+      // 按学生分组
+      const byStudent={};
+      dayRecords.forEach(r=>{
+        if(!byStudent[r.studentId]) byStudent[r.studentId]={records:[]};
+        byStudent[r.studentId].records.push(r);
+      });
+      const groupList=Object.values(byStudent).map(g=>{
+        const stu=DB.data.students[g.records[0].studentId];
+        return {name:stu&&!stu._deleted?stu.name:'(已删除)', grade:stu&&!stu._deleted?(stu.grade||stu.note||''):'', records:g.records.sort((a,b)=>(a.time||'').localeCompare(b.time||''))};
+      }).sort((a,b)=>b.records.length-a.records.length);
+      groupList.forEach(g=>{
+        // 学生汇总
+        const totalV=g.records.reduce((s,r)=>s+(r.vocab||0),0);
+        const totalSp=g.records.reduce((s,r)=>s+(r.spell||0),0);
+        const listenDays=new Set(g.records.filter(r=>r.listening).map(r=>r.time||r.date)).size;
+        const speakDays=new Set(g.records.filter(r=>r.speaking).map(r=>r.time||r.date)).size;
+        const subjs=[...new Set(g.records.map(r=>r.subject||'未分类'))].join('、');
+        html+=`<div style="background:#f8f9fa;border-radius:8px;padding:10px;margin-bottom:8px;border:1px solid #e5e7eb">`;
+        html+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #e5e7eb">`;
+        html+=`<div style="font-size:13px;font-weight:700;color:#1a1a1a">${g.name}</div>`;
+        if(g.grade) html+=`<div style="font-size:10px;color:#666">${g.grade}</div>`;
+        html+=`<div style="flex:1"></div>`;
+        html+=`<div style="font-size:10px;color:#666">${g.records.length}次</div>`;
+        html+=`</div>`;
+        // 学习打卡汇总行
+        const hasStudy = totalV>0 || totalSp>0 || listenDays>0 || speakDays>0;
+        if(hasStudy){
+          html+=`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;padding:6px;background:#f0f4ff;border-radius:6px">`;
+          if(totalV>0) html+=`<span style="background:#4f46e5;color:#fff;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:600">🔤 单词 ${totalV}</span>`;
+          if(totalSp>0) html+=`<span style="background:#059669;color:#fff;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:600">✍️ 拼写 ${totalSp}</span>`;
+          if(listenDays>0) html+=`<span style="background:#d97706;color:#fff;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:600">👂 听力 ${listenDays}次</span>`;
+          if(speakDays>0) html+=`<span style="background:#dc2626;color:#fff;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:600">🗣️ 口语 ${speakDays}次</span>`;
+          html+=`</div>`;
+        }
+        // 详细记录列表
+        html+=`<table style="width:100%;border-collapse:collapse;font-size:10px;margin-top:4px">`;
+        html+=`<thead><tr style="background:#f3f4f6">`;
+        html+=`<th style="text-align:left;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">时间</th>`;
+        html+=`<th style="text-align:left;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">科目</th>`;
+        html+=`<th style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">🔤</th>`;
+        html+=`<th style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">✍️</th>`;
+        html+=`<th style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">👂</th>`;
+        html+=`<th style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">🗣️</th>`;
+        html+=`<th style="text-align:left;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">备注</th>`;
+        html+=`</tr></thead><tbody>`;
+        g.records.forEach((r,i)=>{
+          html+=`<tr style="${i%2?'background:#fafbfc':''}">`;
+          html+=`<td style="padding:4px 6px;border:1px solid #e5e7eb;color:#4f46e5;font-weight:600">${r.time||'—'}</td>`;
+          html+=`<td style="padding:4px 6px;border:1px solid #e5e7eb">${r.subject||'未分类'}</td>`;
+          html+=`<td style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb;color:#4f46e5;font-weight:600">${(r.vocab||0)>0?r.vocab:'—'}</td>`;
+          html+=`<td style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb;color:#059669;font-weight:600">${(r.spell||0)>0?r.spell:'—'}</td>`;
+          html+=`<td style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb">${r.listening?'✓':'—'}</td>`;
+          html+=`<td style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb">${r.speaking?'✓':'—'}</td>`;
+          html+=`<td style="padding:4px 6px;border:1px solid #e5e7eb;color:#666;font-size:9px">${r.note||''}</td>`;
+          html+=`</tr>`;
+        });
+        html+=`</tbody></table>`;
+        html+=`</div>`;
+      });
     }
     html+=`</div>`;
   }
@@ -3527,7 +3605,15 @@ function doSvExport(){
   const ckTypeLabel=ckType==='all'?'':(CK_TYPES.find(t=>t.key===ckType)?.label||'');
   const rangeLabel=from&&to?`${from}_${to}`:(from?`${from}_至今`:'全部');
   const filterLabel=ckTypeLabel?`${subjectLabel}_${ckTypeLabel}`:subjectLabel;
-  const filename = mode==='personal_detail' ? `督学报告_个人详情_${rangeLabel}.png` : `督学报告_${filterLabel}_${rangeLabel}.png`;
+  let filename;
+  if(mode==='daily'){
+    const dailyDate=$('#sv-exp-daily-date')?.value || todayStr();
+    filename = `督学报告_当天详情_${dailyDate}.png`;
+  } else if(mode==='personal_detail'){
+    filename = `督学报告_个人详情_${rangeLabel}.png`;
+  } else {
+    filename = `督学报告_${filterLabel}_${rangeLabel}.png`;
+  }
   if(typeof html2canvas==='undefined'){
     const script=document.createElement('script');
     script.src='https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
@@ -3587,6 +3673,21 @@ function doSvExportCapture(el,filename){
   fixAll(clone);
   // 强制重新布局
   void clone.offsetHeight;
+  // === 自适应宽度：先测量真实内容宽度，如果超过 800px 就扩展容器 ===
+  // 关键修复：科目列等长文本会导致表格实际宽度超过 800px，必须扩展容器才能完整截取
+  let actualW=Math.max(clone.scrollWidth, clone.offsetWidth);
+  if(actualW>CAPTURE_W){
+    offscreen.style.width=actualW+'px';
+    clone.style.width=actualW+'px';
+    clone.style.maxWidth=actualW+'px';
+    clone.style.minWidth=actualW+'px';
+    // 表格设回 100%（现在 100% 等于 actualW）
+    clone.querySelectorAll('table').forEach(t=>{
+      t.style.width='100%';
+      t.style.minWidth='100%';
+    });
+    void clone.offsetHeight;
+  }
   // 测量真实尺寸
   const contentH=clone.scrollHeight, contentW=clone.scrollWidth;
   // 动态 scale：保证不超 canvas 上限，又不至于太小
@@ -5044,8 +5145,11 @@ function openLessonDetail(lessonId,dateStr){
   const stus=l.studentIds.map(id=>DB.data.students[id]).filter(s=>s&&!s._deleted);
   const marks=(l.marks||[]).map(m=>`<span class="tag" style="background:${m.color}20;color:${m.color}">${m.label}</span>`).join(' ');
   const done = isLessonDone(lessonId, dateStr);
+  const onLeave = isLessonLeave(lessonId, dateStr);
   const doneBtnClass = done ? 'btn-danger' : 'btn-primary';
   const doneBtnText = done ? '✓ 取消完成' : '✓ 标记完成';
+  const leaveBtnClass = onLeave ? 'btn-danger' : 'btn-ghost';
+  const leaveBtnText = onLeave ? '📅 取消请假' : '📅 请假';
   const html=`
     <div style="border-left:3px solid ${lessonColor(l)};padding-left:10px;margin-bottom:10px">
       <div style="font-size:16px;font-weight:600">${l.title}</div>
@@ -5061,6 +5165,7 @@ function openLessonDetail(lessonId,dateStr){
     </div>
     <div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap">
       <button class="btn ${doneBtnClass}" style="flex:1" onclick="toggleLessonDone('${l.id}','${dateStr}')">${doneBtnText}</button>
+      <button class="btn ${leaveBtnClass}" style="flex:1" onclick="toggleLessonLeave('${l.id}','${dateStr}')">${leaveBtnText}</button>
       <button class="btn btn-ghost" style="flex:1" onclick="closeModal();openLessonEdit('${l.id}')">编辑</button>
     </div>
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
@@ -6453,6 +6558,37 @@ function getSessionForLessonDate(lessonId, dateStr){
 function isLessonDone(lessonId, dateStr){
   const s=getSessionForLessonDate(lessonId, dateStr);
   return s && s.status==='done';
+}
+function isLessonLeave(lessonId, dateStr){
+  const s=getSessionForLessonDate(lessonId, dateStr);
+  return s && s.status==='leave';
+}
+function toggleLessonLeave(lessonId, dateStr){
+  const l=DB.data.lessons[lessonId]; if(!l) return;
+  let s=getSessionForLessonDate(lessonId, dateStr);
+  if(s){
+    if(s.status==='leave'){ s.status='planned'; s.actualStart=null; s.actualEnd=null; }
+    else { s.status='leave'; s.actualStart=null; s.actualEnd=null; }
+    s.updatedAt=now();
+  } else {
+    const sid=uid();
+    DB.data.sessions[sid]={id:sid,lessonId,teacherId:l.teacherId,studentIds:[...l.studentIds],date:dateStr,planStart:l.hhmm,planEnd:'',actualStart:null,actualEnd:null,status:'leave',createdAt:now(),updatedAt:now()};
+  }
+  DB.save();
+  renderRecords();
+  refreshCurrentView();
+  if($('#modal').classList.contains('show')){
+    const title=$('#sheet-title').textContent;
+    if(title.includes('课次')){
+      const sheetDate = $('#sheet').dataset.date;
+      if(sheetDate && sheetDate!==dateStr){ openDayDetail(sheetDate); }
+      else { openLessonDetail(lessonId, dateStr); }
+    } else if(title.includes('学生')){
+      const sid=$('#sheet').dataset.studentId;
+      if(sid) openStudentView(sid);
+    }
+  }
+  toast(isLessonLeave(lessonId, dateStr)?'已标记请假':'已取消请假');
 }
 function toggleLessonDone(lessonId, dateStr){
   const l=DB.data.lessons[lessonId]; if(!l) return;
