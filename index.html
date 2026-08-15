@@ -545,7 +545,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.27.1';
+const APP_VERSION = 'v3.28.0';
 const APP_VERSION_DATE = '2026-08-15';
 
 const $ = s => document.querySelector(s);
@@ -3907,10 +3907,10 @@ function openLessonEdit(id, prefill={}){
   const teachers = Object.values(DB.data.teachers).filter(t=>!t._deleted);
   if(teachers.length===0){ toast('请先添加老师'); switchTab('mine'); openTeacherEdit(); return; }
   const students = Object.values(DB.data.students).filter(s=>!s._deleted);
-  const subOpts = `<option value="">无代课</option>`+teachers.map(t=>`<option value="${t.id}" ${l?.subTeacherId===t.id?'selected':''}>${t.name}</option>`).join('');
-  const coOpts = `<option value="">无</option>`+teachers.map(t=>`<option value="${t.id}" ${l?.coTeacherId===t.id?'selected':''}>${t.name}</option>`).join('');
+  const subOpts = `<option value="">无代课</option>`+teachers.map(t=>`<option value="${t.id}" ${l?.subTeacherId===t.id||(!l&&prefill.subTeacherId===t.id)?'selected':''}>${t.name}</option>`).join('');
+  const coOpts = `<option value="">无</option>`+teachers.map(t=>`<option value="${t.id}" ${l?.coTeacherId===t.id||(!l&&prefill.coTeacherId===t.id)?'selected':''}>${t.name}</option>`).join('');
   const html = `
-    <div class="form-row"><label>课次名称 <span class="req">*</span></label><input class="form-control" id="f-title" value="${l?.title||''}" placeholder="如:钢琴基础"></div>
+    <div class="form-row"><label>课次名称 <span class="req">*</span></label><input class="form-control" id="f-title" value="${l?.title||prefill.title||''}" placeholder="如:钢琴基础"></div>
     <div class="form-row"><label>类型</label><div class="chip-group" id="f-type">
       ${COURSE_TYPES.map(t=>`<button class="chip ${l?.type===t.v?'active':''}" data-v="${t.v}" style="${l?.type===t.v?'':'border-color:'+t.bg+';color:'+t.fg}">${t.l}</button>`).join('')}
     </div></div>
@@ -3928,6 +3928,9 @@ function openLessonEdit(id, prefill={}){
       <select class="form-control" id="f-sub-teacher">${subOpts}</select>
       <div style="font-size:10px;color:var(--text3);margin-top:3px">如原老师请假，选择代课老师后会在课次中标注</div>
     </div>
+    <div class="form-row"><label>学生 <span style="font-size:10px;color:var(--text3);font-weight:400">(勾选后保存，学生课时自动同步)</span></label>
+      ${students.length?`<div class="pick-list" id="f-students">${students.map(s=>{const in_=l?.studentIds?.includes(s.id)||prefill.studentIds?.includes(s.id);return `<label class="pick-item"><input type="checkbox" data-id="${s.id}" ${in_?'checked':''}><span class="nm">${s.name}${s.note?' ('+s.note+')':''}</span></label>`;}).join('')}</div>`:'<div style="font-size:12px;color:var(--text3);padding:8px">暂无学生，请先在「我的」页面添加学生</div>'}
+    </div>
     <div class="form-row"><label>排课方式</label><div class="chip-group" id="f-mode">
       <button class="chip ${(!l||l.mode==='week')?'active':''}" data-v="week">周循环</button>
       <button class="chip ${l?.mode==='single'?'active':''}" data-v="single">单次</button>
@@ -3935,8 +3938,8 @@ function openLessonEdit(id, prefill={}){
     </div></div>
     <div class="form-row" id="f-weekday-row"><label>每周哪天</label>
       <select class="form-control" id="f-weekday">
-        <option value="all" ${l?.weekday==='all'?'selected':''}>每天</option>
-        ${[1,2,3,4,5,6,0].map(d=>`<option value="${d}" ${l?.weekday===d?'selected':''}>${dayNames[d]}</option>`).join('')}
+        <option value="all" ${l?.weekday==='all'||(!l&&prefill.weekday==='all')?'selected':''}>每天</option>
+        ${[1,2,3,4,5,6,0].map(d=>`<option value="${d}" ${l?.weekday===d||(!l&&prefill.weekday===d)?'selected':''}>${dayNames[d]}</option>`).join('')}
       </select>
     </div>
     <div class="form-row hidden" id="f-date-row"><label>上课日期</label><input type="date" class="form-control" id="f-date" value="${l?.date||todayStr()}"></div>
@@ -3956,12 +3959,9 @@ function openLessonEdit(id, prefill={}){
         ${[1,2,3,4,5,6,0].map(d=>`<option value="weekly-${d}">每周${dayNames[d]}</option>`).join('')}
       </select>
     </div>
-    <div class="form-row"><label>开始时间 <span class="req">*</span></label><input type="time" class="form-control" id="f-hhmm" value="${l?.hhmm||'09:00'}"></div>
-    <div class="form-row"><label>时长(分钟)</label><input type="number" class="form-control" id="f-dur" value="${l?.duration||60}" min="15" step="15"></div>
+    <div class="form-row"><label>开始时间 <span class="req">*</span></label><input type="time" class="form-control" id="f-hhmm" value="${l?.hhmm||prefill.hhmm||'09:00'}"></div>
+    <div class="form-row"><label>时长(分钟)</label><input type="number" class="form-control" id="f-dur" value="${l?.duration||prefill.duration||60}" min="15" step="15"></div>
     <div class="form-row"><label>备注</label><textarea class="form-control" id="f-note">${l?.note||''}</textarea></div>
-    <div class="form-row"><label>学生</label>
-      ${students.length?`<div class="pick-list" id="f-students">${students.map(s=>{const in_=l?.studentIds?.includes(s.id);return `<label class="pick-item"><input type="checkbox" data-id="${s.id}" ${in_?'checked':''}><span class="nm">${s.name}${s.note?' ('+s.note+')':''}</span></label>`;}).join('')}</div>`:'<div style="font-size:12px;color:var(--text3);padding:8px">暂无学生，请先在「我的」页面添加学生</div>'}
-    </div>
   `;
   const footer = `<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="saveLesson('${id||''}')">保存</button>`;
   openModal(html, footer);
@@ -4318,6 +4318,16 @@ function calcPlanEnd(hhmm, duration){
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 
+// 新建课次后同步学生课时：单次+1节、批量+N节、周循环只建立科目键(不加节数)
+function bumpStudentTotals(studentIds, title, n){
+  (studentIds||[]).forEach(sid=>{
+    const s=DB.data.students[sid]; if(!s||s._deleted) return;
+    if(!s.lessonTotals) s.lessonTotals={};
+    if(n>0) s.lessonTotals[title]=(s.lessonTotals[title]||0)+n;
+    else if(!(title in s.lessonTotals)) s.lessonTotals[title]=0;
+    s.updatedAt=now();
+  });
+}
 function saveLesson(id){
   const title=$('#f-title').value.trim(); if(!title){toast('请输入名称');return;}
   let type=$('#f-type .chip.active')?.dataset.v;
@@ -4357,6 +4367,7 @@ function saveLesson(id){
       const nid=uid();
       DB.data.lessons[nid]={id:nid,title,type,teacherId,studentIds:[...baseStudentIds],marks:JSON.parse(JSON.stringify(baseMarks)),mode:'single',date:ds,weekday:dayOfWeek(ds),hhmm,duration,note,subTeacherId:baseSubTeacherId,coTeacherId:baseCoTeacherId,batchId,createdAt:t,updatedAt:t};
     });
+    bumpStudentTotals(baseStudentIds, title, dates.length);
     DB.save(); closeModal(); refreshCurrentView(); toast(`已创建 ${dates.length} 个课次${id?'(已替换原课次)':''}`);
     return;
   }
@@ -4378,6 +4389,8 @@ function saveLesson(id){
   else{
     const nid=uid();
     DB.data.lessons[nid]={id:nid,studentIds:selectedStudentIds,marks:[],createdAt:t,...data,subTeacherId:$('#f-sub-teacher').value,coTeacherId:$('#f-co-teacher').value};
+    // 新建课次：单次课每个学生+1节，周循环只建立科目键
+    bumpStudentTotals(selectedStudentIds, title, mode==='single'?1:0);
   }
   DB.save(); closeModal(); refreshCurrentView(); toast('已保存');
 }
@@ -4526,6 +4539,76 @@ function removeMark(lessonId,idx){
   const l=DB.data.lessons[lessonId];
   l.marks.splice(idx,1); l.updatedAt=now(); DB.save();
   openMarks(lessonId);
+}
+
+/* ==================== 学生课程统一标注 ==================== */
+// 打开统一标注弹窗：按科目分组列出该学生全部课次（默认全选），多选标注后批量应用
+function openStudentMarks(studentId){
+  const s=DB.data.students[studentId]; if(!s||s._deleted) return;
+  const lessons=Object.values(DB.data.lessons).filter(l=>!l._deleted&&l.studentIds.includes(studentId))
+    .sort((a,b)=>((a.mode==='single'?a.date:'')||'').localeCompare((b.mode==='single'?b.date:'')||'')||a.hhmm.localeCompare(b.hhmm));
+  if(!lessons.length){ toast('该学生暂无课次，先排课再标注'); return; }
+  const groups={};
+  lessons.forEach(l=>{
+    const k=normalizeSubject(l.title)||'其他';
+    if(!groups[k]) groups[k]=[];
+    groups[k].push(l);
+  });
+  const lessonLabel=l=>{
+    if(l.mode==='week') return `每周${l.weekday==='all'?'每天':dayNames[l.weekday]} ${l.hhmm}`;
+    return `${l.date||'?'} ${l.hhmm}`;
+  };
+  const html=`
+    <div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.6">为「<b>${s.name}</b>」的课次统一添加标注：先点选标注（可多个），再勾选要应用的课次。</div>
+    <div class="form-row"><label>选择标注（可多选）</label>
+      <div class="chip-group" id="smk-marks">${MARK_PRESETS.map(m=>`<button class="chip" data-l="${m.label}" data-c="${m.color}" style="border-color:${m.color}40;color:${m.color}">${m.label}</button>`).join('')}</div>
+      <div style="display:flex;gap:6px;margin-top:6px"><input class="form-control" id="smk-custom" placeholder="自定义标注名称" style="flex:2"><button class="btn btn-sm btn-ghost" onclick="addStudentMarkChip()">+ 加入</button></div>
+    </div>
+    <div class="form-row"><label>应用到课次（默认全选）</label>
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <button class="btn btn-sm btn-ghost" onclick="smkCheckAll(true)">全选</button>
+        <button class="btn btn-sm btn-ghost" onclick="smkCheckAll(false)">全不选</button>
+      </div>
+      <div id="smk-lessons">
+      ${Object.entries(groups).map(([subj,ls])=>`
+        <div style="font-size:11px;font-weight:600;color:var(--text2);margin:8px 0 3px">${subj} (${ls.length})</div>
+        <div class="pick-list">${ls.map(l=>`<label class="pick-item"><input type="checkbox" class="smk-l" value="${l.id}" checked><span class="nm">${l.title} · ${lessonLabel(l)}</span></label>`).join('')}</div>
+      `).join('')}
+      </div>
+    </div>
+  `;
+  const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="applyStudentMarks('${studentId}')">应用标注</button>`;
+  openModal(html,footer); setSheetTitle('统一标注 · '+s.name);
+  $('#smk-marks').addEventListener('click',e=>{
+    if(e.target.classList.contains('chip')) e.target.classList.toggle('active');
+  });
+}
+function smkCheckAll(v){ $$('#smk-lessons input.smk-l').forEach(c=>c.checked=v); }
+function addStudentMarkChip(){
+  const label=$('#smk-custom').value.trim(); if(!label){toast('请输入标注名称');return;}
+  const color='#4f46e5';
+  const b=document.createElement('button');
+  b.className='chip active'; b.dataset.l=label; b.dataset.c=color;
+  b.style.borderColor=color+'40'; b.style.color=color; b.textContent=label;
+  $('#smk-marks').appendChild(b);
+  $('#smk-custom').value='';
+}
+function applyStudentMarks(studentId){
+  const marks=[...$$('#smk-marks .chip.active')].map(c=>({label:c.dataset.l,color:c.dataset.c}));
+  if(!marks.length){ toast('请先点选至少一个标注'); return; }
+  const ids=[...$$('#smk-lessons input.smk-l:checked')].map(c=>c.value);
+  if(!ids.length){ toast('请勾选要应用的课次'); return; }
+  const t=now(); let added=0;
+  ids.forEach(id=>{
+    const l=DB.data.lessons[id]; if(!l||l._deleted) return;
+    if(!l.marks) l.marks=[];
+    marks.forEach(m=>{ if(!l.marks.some(x=>x.label===m.label)){ l.marks.push({label:m.label,color:m.color}); added++; } });
+    l.updatedAt=t;
+  });
+  DB.save(); closeModal(); refreshCurrentView();
+  toast(`✓ 已为 ${ids.length} 个课次统一添加标注（新增${added}处，重复自动跳过）`);
+  // 学生详情弹窗打开时刷新
+  if(currentTab==='mine') renderMine();
 }
 
 /* ==================== 待调课 & 对调课次 ==================== */
@@ -5316,6 +5399,7 @@ function renderStudentBlocks(studentId){
         <button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();undoLastDone('${studentId}','${subj.name}')" title="撤销最近一次上课">↶撤销</button>
         <button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();adjTotal('${studentId}','${subj.name}',1)">+1节</button>
         <button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();adjTotal('${studentId}','${subj.name}',-1)">-1节</button>
+        <button class="btn btn-sm btn-ghost" style="background:#eff6ff;color:#1d4ed8" onclick="event.stopPropagation();openStudentLessonAdd('${studentId}','${subj.name}')" title="为该科目排课，默认沿用同老师同时间">📅排课</button>
         <input type="number" class="pkg-num-input" value="${total}" min="${used}" style="width:52px;text-align:center;border:1px solid var(--border);border-radius:6px;padding:3px 4px;font-size:12px" onchange="setTotalDirect('${studentId}','${subj.name}',this.value)" title="直接输入课时总数"/>
         <button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();recalcSubjectCounts('${studentId}','${subj.name}')" title="按已完成记录数重算已上节数" style="background:#f3e8ff;color:#6b21a8">↻重算</button>
         <button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();openSubjectMenu('${studentId}','${subj.name}',${scheduled},${used},${total})">⋯ 更多</button>
@@ -5398,6 +5482,34 @@ function markLessonDoneFromBlocks(studentId, normSubject){
     openStudentView(studentId);
   }
   toast(`✓ 已标记 ${norm} 一节课完成 (${targetDate})`);
+}
+
+// 为学生排课：默认沿用该科目最近一次课次的老师/时间/时长/合教
+function openStudentLessonAdd(studentId, normSubject){
+  const s=DB.data.students[studentId]; if(!s||s._deleted) return;
+  const teachers=Object.values(DB.data.teachers).filter(t=>!t._deleted);
+  if(teachers.length===0){ toast('请先添加老师'); switchTab('mine'); openTeacherEdit(); return; }
+  let ref=null;
+  if(normSubject){
+    const mine=Object.values(DB.data.lessons)
+      .filter(l=>!l._deleted && l.studentIds.includes(studentId) && normalizeSubject(l.title)===normSubject)
+      .sort((a,b)=>(b.updatedAt||b.createdAt||0)-(a.updatedAt||a.createdAt||0));
+    ref=mine[0]||null;
+  }
+  const prefill={
+    title: ref?ref.title:(normSubject||''),
+    teacherId: ref?ref.teacherId:(DB.data.currentTeacherId||teachers[0].id),
+    coTeacherId: ref?(ref.coTeacherId||''):'',
+    subTeacherId: ref?(ref.subTeacherId||''):'',
+    hhmm: ref?ref.hhmm:'18:00',
+    duration: ref?ref.duration:60,
+    mode: ref&&ref.mode==='week'?'week':'single',
+    weekday: ref&&ref.mode==='week'?ref.weekday:undefined,
+    date: todayStr(),
+    studentIds:[studentId]
+  };
+  openLessonEdit(null, prefill);
+  setSheetTitle('排课 · '+s.name+(ref?'（默认同老师同时间）':''));
 }
 
 // 点击课时徽章直接编辑（支持已上/已排/剩余/总课时）
@@ -6003,7 +6115,11 @@ function openStudentView(studentId){
         <button class="btn btn-sm btn-ghost btn-block" style="margin-bottom:6px" onclick="closeModal();openAddPackage('${s.id}')">+ 添加课时包</button>
       </div>
     </div>
-    <div style="font-size:12px;font-weight:600;color:var(--text2);margin:10px 0 6px">📅 课次安排 (${lessons.length})</div>
+    <div style="display:flex;align-items:center;gap:6px;margin:10px 0 6px">
+      <div style="font-size:12px;font-weight:600;color:var(--text2);flex:1">📅 课次安排 (${lessons.length})</div>
+      <button class="btn btn-sm btn-ghost" style="background:#eff6ff;color:#1d4ed8;font-size:10px" onclick="closeModal();openStudentLessonAdd('${s.id}','')">➕排课</button>
+      <button class="btn btn-sm btn-ghost" style="font-size:10px" onclick="openStudentMarks('${s.id}')">🏷️统一标注</button>
+    </div>
     ${sectionHtml('daily', '每天上课', dailyLessons.length, dailyHtml)}
     ${sectionHtml('week', '周循环', Object.values(weekGroups).flat().length, weekHtml)}
     ${sectionHtml('single', '单次课次', singles.length, singleHtml)}
@@ -6897,6 +7013,33 @@ function openTeacherSchedule(teacherId){
     <div class="stat-card"><div class="s-num">${students.length}</div><div class="s-lbl">学生数</div></div>
   </div>`;
 
+  // 📊 上课统计：按科目统计已完成课节，区分主教(上半节)/合教(下半节)/代课
+  const subjStat={};
+  Object.values(DB.data.sessions).forEach(ss=>{
+    if(ss._deleted||ss.status!=='done') return;
+    const l=DB.data.lessons[ss.lessonId]; if(!l||l._deleted) return;
+    const subj=normalizeSubject(l.title)||'其他';
+    if(!subjStat[subj]) subjStat[subj]={main:0,co:0,sub:0};
+    if(l.teacherId===teacherId) subjStat[subj].main++;
+    else if(l.coTeacherId===teacherId) subjStat[subj].co++;
+    if(l.subTeacherId===teacherId) subjStat[subj].sub++;
+  });
+  const statRows=Object.entries(subjStat).map(([name,v])=>({name,...v,total:v.main+v.co+v.sub})).filter(r=>r.total>0).sort((a,b)=>b.total-a.total);
+  if(statRows.length){
+    const sumMain=statRows.reduce((s,r)=>s+r.main,0);
+    const sumCo=statRows.reduce((s,r)=>s+r.co,0);
+    const sumSub=statRows.reduce((s,r)=>s+r.sub,0);
+    html+=`<div style="font-size:12px;font-weight:600;color:var(--text2);margin:10px 0 6px">📊 上课统计（已完成课节）</div>
+    <table class="stu-summary" style="width:100%">
+      <thead><tr><th>科目</th><th>主教<br>(上半节)</th><th>合教<br>(下半节)</th><th>代课</th><th>合计</th></tr></thead>
+      <tbody>
+      ${statRows.map(r=>`<tr><td class="subj-name"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${subjectColor(r.name)};margin-right:5px"></span>${r.name}</td><td>${r.main||'-'}</td><td>${r.co?`<span style="color:#7c3aed;font-weight:600">${r.co}</span>`:'-'}</td><td>${r.sub?`<span style="color:var(--red);font-weight:600">${r.sub}</span>`:'-'}</td><td style="font-weight:600">${r.total}</td></tr>`).join('')}
+      <tr style="border-top:2px solid var(--border);font-weight:700"><td class="subj-name">合计</td><td>${sumMain}</td><td>${sumCo}</td><td>${sumSub}</td><td style="color:${color}">${sumMain+sumCo+sumSub}</td></tr>
+      </tbody>
+    </table>
+    <div style="font-size:10px;color:var(--text3);margin-top:4px;line-height:1.5">主教=上半节，合教老师=下半节；统计基于已完成(✓)的上课记录</div>`;
+  }
+
   // 学生列表
   if(students.length){
     html+=`<div style="font-size:12px;font-weight:600;color:var(--text2);margin:10px 0 6px">🎓 学生 (${students.length})</div>`;
@@ -7543,7 +7686,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v35';
+    const sw=`const C='tw-cache-v36';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
