@@ -545,8 +545,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.27.0';
-const APP_VERSION_DATE = '2026-08-11';
+const APP_VERSION = 'v3.27.1';
+const APP_VERSION_DATE = '2026-08-15';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -3038,10 +3038,12 @@ function showSvDay(date){
   const wd=dayOfWeek(date);
   const bySubject={};
   list.forEach(s=>{ const k=s.subject||'未分类'; if(!bySubject[k]) bySubject[k]=[]; bySubject[k].push(s); });
-  let html=`<div style="margin-bottom:10px">
+  let html=`<div id="sv-day-detail" style="margin-bottom:10px">
     <div style="display:flex;align-items:center;gap:8px">
       <span style="font-size:15px;font-weight:700">${date.slice(5)}${isToday?' (今天)':''}</span>
       <span style="font-size:12px;color:var(--text3)">${dayNames[wd]} · ${list.length}人次</span>
+      <div style="flex:1"></div>
+      <button class="btn btn-sm btn-ghost" style="font-size:11px;padding:4px 8px" onclick="exportSvDayDetail('${date}')">📤 导出图片</button>
     </div>
   </div>`;
   Object.keys(bySubject).sort().forEach(subjName=>{
@@ -3075,6 +3077,60 @@ function showSvDay(date){
   const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button>`;
   openModal(html,footer);
   setSheetTitle('📍 '+date.slice(5)+' 打卡详情');
+}
+// 导出当天详情为图片（与 showSvDay 样式完全一致）
+function exportSvDayDetail(date){
+  const list=getFilteredSvList().filter(s=>s.date===date).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
+  const wd=dayOfWeek(date);
+  const bySubject={};
+  list.forEach(s=>{ const k=s.subject||'未分类'; if(!bySubject[k]) bySubject[k]=[]; bySubject[k].push(s); });
+  let html=`<div style="background:#fff;color:#1a1a1a;padding:16px;font-family:system-ui,sans-serif">
+    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px">
+      <span style="font-size:16px;font-weight:700">${date.slice(5)}</span>
+      <span style="font-size:12px;color:#666">周${['日','一','二','三','四','五','六'][wd]} · ${list.length}人次</span>
+    </div>`;
+  if(list.length===0){
+    html+=`<div style="color:#999;font-size:12px;padding:16px;text-align:center">该日期暂无打卡记录</div>`;
+  } else {
+    Object.keys(bySubject).sort().forEach(subjName=>{
+      const subjItems=bySubject[subjName];
+      const color=subjectColor(subjName);
+      html+=`<div style="margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:5px;padding:2px 0;margin-bottom:4px">
+          <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0"></span>
+          <span style="font-size:12px;font-weight:600;color:${color}">${subjName}</span>
+          <span style="font-size:11px;color:#999">${subjItems.length}人</span>
+        </div>`;
+      subjItems.forEach(s=>{
+        const stu=DB.data.students[s.studentId];
+        const stuName=stu&&!stu._deleted?stu.name:'(学生已删除)';
+        html+=`<div style="background:#f8f9fa;border-left:3px solid ${color};border-radius:6px;padding:8px 12px;margin-bottom:4px">
+          <div style="font-weight:600;font-size:13px;color:#1a1a1a">${stuName}</div>
+          <div style="font-size:11px;color:#666;margin-top:2px">${s.time?'🕐 '+s.time:''}${s.note?' · 📝 '+s.note:''}</div>
+          ${(s.vocab>0||s.spell>0||s.listening||s.speaking)?`<div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap">${s.vocab>0?'<span style="background:#4f46e515;color:#4f46e5;border-radius:8px;padding:1px 5px;font-size:9px">🔤'+s.vocab+'</span>':''}${s.spell>0?'<span style="background:#05966915;color:#059669;border-radius:8px;padding:1px 5px;font-size:9px">✍️'+s.spell+'</span>':''}${s.listening?'<span style="background:#d9770615;color:#d97706;border-radius:8px;padding:1px 5px;font-size:9px">👂</span>':''}${s.speaking?'<span style="background:#dc262615;color:#dc2626;border-radius:8px;padding:1px 5px;font-size:9px">🗣️</span>':''}</div>`:''}
+        </div>`;
+      });
+      html+=`</div>`;
+    });
+  }
+  html+=`<div style="text-align:center;margin-top:12px;font-size:9px;color:#ccc">— 督学打卡 · ${date} —</div></div>`;
+  // 离屏渲染容器
+  const wrap=document.createElement('div');
+  wrap.style.cssText='position:fixed;left:-99999px;top:0;width:420px;background:#fff;z-index:-1';
+  wrap.innerHTML=html;
+  document.body.appendChild(wrap);
+  toast('正在生成图片...');
+  html2canvas(wrap.firstElementChild,{scale:2,backgroundColor:'#ffffff',useCORS:true}).then(canvas=>{
+    wrap.remove();
+    const a=document.createElement('a');
+    a.download=`督学打卡_${date}.png`;
+    a.href=canvas.toDataURL('image/png');
+    a.click();
+    toast('已保存到下载');
+  }).catch(e=>{
+    wrap.remove();
+    toast('导出失败：'+e.message);
+  });
 }
 /* ---- 导出报告 ---- */
 function openSvExport(){
@@ -3278,72 +3334,41 @@ function updateSvExportPreview(){
     }
     html+=`</div>`;
   }
-  // 当天详情模式（列表格式，按学生分组）
+  // 当天详情模式（按科目分组，与 showSvDay 一致）
   if(mode==='daily'){
     const dailyDate=$('#sv-exp-daily-date')?.value || todayStr();
     const dayRecords=list.filter(s=>s.date===dailyDate).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
-    const dow=['日','一','二','三','四','五','六'][dayOfWeek(dailyDate)];
-    html+=`<div><div style="font-size:13px;font-weight:600;margin-bottom:6px">📅 ${dailyDate}（周${dow}）详情 · 共${dayRecords.length}条记录</div>`;
+    const wd=dayOfWeek(dailyDate);
+    const dowLbl=['日','一','二','三','四','五','六'][wd];
+    html+=`<div style="background:#fff">
+      <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px">
+        <span style="font-size:15px;font-weight:700;color:#1a1a1a">${dailyDate.slice(5)}</span>
+        <span style="font-size:12px;color:#666">周${dowLbl} · ${dayRecords.length}人次</span>
+      </div>`;
     if(dayRecords.length===0){
       html+=`<div style="color:#999;font-size:12px;padding:8px;text-align:center">该日期暂无打卡记录</div>`;
     } else {
-      // 按学生分组
-      const byStudent={};
-      dayRecords.forEach(r=>{
-        if(!byStudent[r.studentId]) byStudent[r.studentId]={records:[]};
-        byStudent[r.studentId].records.push(r);
-      });
-      const groupList=Object.values(byStudent).map(g=>{
-        const stu=DB.data.students[g.records[0].studentId];
-        return {name:stu&&!stu._deleted?stu.name:'(已删除)', grade:stu&&!stu._deleted?(stu.grade||stu.note||''):'', records:g.records.sort((a,b)=>(a.time||'').localeCompare(b.time||''))};
-      }).sort((a,b)=>b.records.length-a.records.length);
-      groupList.forEach(g=>{
-        // 学生汇总
-        const totalV=g.records.reduce((s,r)=>s+(r.vocab||0),0);
-        const totalSp=g.records.reduce((s,r)=>s+(r.spell||0),0);
-        const listenDays=new Set(g.records.filter(r=>r.listening).map(r=>r.time||r.date)).size;
-        const speakDays=new Set(g.records.filter(r=>r.speaking).map(r=>r.time||r.date)).size;
-        const subjs=[...new Set(g.records.map(r=>r.subject||'未分类'))].join('、');
-        html+=`<div style="background:#f8f9fa;border-radius:8px;padding:10px;margin-bottom:8px;border:1px solid #e5e7eb">`;
-        html+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #e5e7eb">`;
-        html+=`<div style="font-size:13px;font-weight:700;color:#1a1a1a">${g.name}</div>`;
-        if(g.grade) html+=`<div style="font-size:10px;color:#666">${g.grade}</div>`;
-        html+=`<div style="flex:1"></div>`;
-        html+=`<div style="font-size:10px;color:#666">${g.records.length}次</div>`;
-        html+=`</div>`;
-        // 学习打卡汇总行
-        const hasStudy = totalV>0 || totalSp>0 || listenDays>0 || speakDays>0;
-        if(hasStudy){
-          html+=`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;padding:6px;background:#f0f4ff;border-radius:6px">`;
-          if(totalV>0) html+=`<span style="background:#4f46e5;color:#fff;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:600">🔤 单词 ${totalV}</span>`;
-          if(totalSp>0) html+=`<span style="background:#059669;color:#fff;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:600">✍️ 拼写 ${totalSp}</span>`;
-          if(listenDays>0) html+=`<span style="background:#d97706;color:#fff;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:600">👂 听力 ${listenDays}次</span>`;
-          if(speakDays>0) html+=`<span style="background:#dc2626;color:#fff;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:600">🗣️ 口语 ${speakDays}次</span>`;
-          html+=`</div>`;
-        }
-        // 详细记录列表
-        html+=`<table style="width:100%;border-collapse:collapse;font-size:10px;margin-top:4px">`;
-        html+=`<thead><tr style="background:#f3f4f6">`;
-        html+=`<th style="text-align:left;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">时间</th>`;
-        html+=`<th style="text-align:left;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">科目</th>`;
-        html+=`<th style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">🔤</th>`;
-        html+=`<th style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">✍️</th>`;
-        html+=`<th style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">👂</th>`;
-        html+=`<th style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">🗣️</th>`;
-        html+=`<th style="text-align:left;padding:4px 6px;border:1px solid #e5e7eb;font-weight:600">备注</th>`;
-        html+=`</tr></thead><tbody>`;
-        g.records.forEach((r,i)=>{
-          html+=`<tr style="${i%2?'background:#fafbfc':''}">`;
-          html+=`<td style="padding:4px 6px;border:1px solid #e5e7eb;color:#4f46e5;font-weight:600">${r.time||'—'}</td>`;
-          html+=`<td style="padding:4px 6px;border:1px solid #e5e7eb">${r.subject||'未分类'}</td>`;
-          html+=`<td style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb;color:#4f46e5;font-weight:600">${(r.vocab||0)>0?r.vocab:'—'}</td>`;
-          html+=`<td style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb;color:#059669;font-weight:600">${(r.spell||0)>0?r.spell:'—'}</td>`;
-          html+=`<td style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb">${r.listening?'✓':'—'}</td>`;
-          html+=`<td style="text-align:center;padding:4px 6px;border:1px solid #e5e7eb">${r.speaking?'✓':'—'}</td>`;
-          html+=`<td style="padding:4px 6px;border:1px solid #e5e7eb;color:#666;font-size:9px">${r.note||''}</td>`;
-          html+=`</tr>`;
+      // 按科目分组（与 showSvDay 一致）
+      const bySubject={};
+      dayRecords.forEach(s=>{ const k=s.subject||'未分类'; if(!bySubject[k]) bySubject[k]=[]; bySubject[k].push(s); });
+      Object.keys(bySubject).sort().forEach(subjName=>{
+        const subjItems=bySubject[subjName];
+        const color=subjectColor(subjName);
+        html+=`<div style="margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:5px;padding:2px 0;margin-bottom:4px">
+            <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0"></span>
+            <span style="font-size:12px;font-weight:600;color:${color}">${subjName}</span>
+            <span style="font-size:11px;color:#999">${subjItems.length}人</span>
+          </div>`;
+        subjItems.forEach(s=>{
+          const stu=DB.data.students[s.studentId];
+          const stuName=stu&&!stu._deleted?stu.name:'(学生已删除)';
+          html+=`<div style="background:#f8f9fa;border-left:3px solid ${color};border-radius:6px;padding:8px 12px;margin-bottom:4px">
+            <div style="font-weight:600;font-size:13px;color:#1a1a1a">${stuName}</div>
+            <div style="font-size:11px;color:#666;margin-top:2px">${s.time?'🕐 '+s.time:''}${s.note?' · 📝 '+s.note:''}</div>
+            ${(s.vocab>0||s.spell>0||s.listening||s.speaking)?`<div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap">${s.vocab>0?'<span style="background:#4f46e515;color:#4f46e5;border-radius:8px;padding:1px 5px;font-size:9px">🔤'+s.vocab+'</span>':''}${s.spell>0?'<span style="background:#05966915;color:#059669;border-radius:8px;padding:1px 5px;font-size:9px">✍️'+s.spell+'</span>':''}${s.listening?'<span style="background:#d9770615;color:#d97706;border-radius:8px;padding:1px 5px;font-size:9px">👂</span>':''}${s.speaking?'<span style="background:#dc262615;color:#dc2626;border-radius:8px;padding:1px 5px;font-size:9px">🗣️</span>':''}</div>`:''}
+          </div>`;
         });
-        html+=`</tbody></table>`;
         html+=`</div>`;
       });
     }
@@ -3529,63 +3554,51 @@ function updateSvExportPreview(){
         dates.forEach(d=>{ if(pDate){ const diff=Math.round((new Date(d+'T00:00:00')-new Date(pDate+'T00:00:00'))/86400000); tStrk=diff===1?tStrk+1:1; } else tStrk=1; if(tStrk>longStreak)longStreak=tStrk; pDate=d; });
         const mPfx=today.slice(0,7);
         const mDays=new Set(records.filter(s=>s.date.startsWith(mPfx)).map(s=>s.date)).size;
-        const ts2={m:0,a:0,e:0,u:0};
-        records.forEach(s=>{ if(!s.time){ts2.u++;return;} const h=parseInt(s.time.split(':')[0]); if(h<12)ts2.m++;else if(h<18)ts2.a++;else ts2.e++; });
         const sMap={};
         records.forEach(s=>{ const k=s.subject||'未分类'; if(!sMap[k])sMap[k]={count:0,days:new Set()}; sMap[k].count++; sMap[k].days.add(s.date); });
         const sStats=Object.entries(sMap).map(([name,v])=>({name,count:v.count,days:v.days.size})).sort((a,b)=>b.count-a.count);
-        const dwCount=[0,0,0,0,0,0,0];
-        records.forEach(s=>{ dwCount[dayOfWeek(s.date)]++; });
-        const maxDw=Math.max(1,...dwCount);
-        const dwLabels=['日','一','二','三','四','五','六'];
         const avColor=sStats.length>0?subjectColor(sStats[0].name):'#4f46e5';
-        // 迷你热力图（近3月）
-        const hEnd=new Date(today+'T00:00:00');
-        const hStart=new Date(hEnd); hStart.setDate(hStart.getDate()-63);
-        const hsD=hStart.getDay(); hStart.setDate(hStart.getDate()-(hsD===0?6:hsD-1));
-        const hWeeks=[]; let hCur=new Date(hStart);
-        while(hCur<=hEnd){ const wk=[]; for(let i=0;i<7;i++){ const ds=fmtDate(hCur); const c=records.filter(s=>s.date===ds).length; wk.push({date:ds,count:c,isToday:ds===today,isFut:ds>today}); hCur.setDate(hCur.getDate()+1); } hWeeks.push(wk); }
-        const hColor=(c,f)=>{ if(f)return'#f9fafb'; if(c===0)return'#ebedf0'; if(c===1)return'#a7f3d0'; if(c<=3)return'#34d399'; if(c<=5)return'#059669'; return'#064e3b'; };
-        // 卡片
+        // 卡片（简化版：去掉热力图、星期分布、6列指标）
         html+=`<div style="background:#f8f9fa;border-radius:10px;padding:12px;margin-bottom:10px;border:1px solid #e5e7eb">`;
-        html+=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;padding:10px;background:linear-gradient(135deg,${avColor}15,${avColor}05);border-radius:8px">
-          <div style="width:40px;height:40px;border-radius:50%;background:${avColor};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;flex-shrink:0">${stu_s.name.charAt(0)}</div>
+        html+=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <div style="width:36px;height:36px;border-radius:50%;background:${avColor};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0">${stu_s.name.charAt(0)}</div>
           <div style="flex:1"><div style="font-size:14px;font-weight:700">${stu_s.name}</div><div style="font-size:10px;color:#666">${stu_s.grade||'—'} · ${tDays}天${tVisits}次</div></div>
         </div>`;
-        // 迷你统计
-        html+=`<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin-bottom:10px">
-          <div style="background:#fef3c7;border-radius:5px;padding:5px 2px;text-align:center"><div style="font-size:14px;font-weight:700;color:#d97706">${curStreak}</div><div style="font-size:7px;color:#666">🔥连续</div></div>
-          <div style="background:#f0f4ff;border-radius:5px;padding:5px 2px;text-align:center"><div style="font-size:14px;font-weight:700;color:#4f46e5">${longStreak}</div><div style="font-size:7px;color:#666">🏆最长</div></div>
-          <div style="background:#f0fdf4;border-radius:5px;padding:5px 2px;text-align:center"><div style="font-size:14px;font-weight:700;color:#059669">${tDays}</div><div style="font-size:7px;color:#666">📅天数</div></div>
-          <div style="background:#fce7f3;border-radius:5px;padding:5px 2px;text-align:center"><div style="font-size:14px;font-weight:700;color:#db2777">${tVisits}</div><div style="font-size:7px;color:#666">📝次数</div></div>
-          <div style="background:#f5f3ff;border-radius:5px;padding:5px 2px;text-align:center"><div style="font-size:14px;font-weight:700;color:#7c3aed">${mDays}</div><div style="font-size:7px;color:#666">📊本月</div></div>
-          <div style="background:#fff7ed;border-radius:5px;padding:5px 2px;text-align:center"><div style="font-size:14px;font-weight:700;color:#ea580c">${(tDays/Math.max(1,Math.ceil((new Date(today+'T00:00:00')-new Date(dates[0]+'T00:00:00'))/86400000/7))).toFixed(1)}</div><div style="font-size:7px;color:#666">📈周均</div></div>
+        // 4个核心指标
+        html+=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px">
+          <div style="background:#fef3c7;border-radius:6px;padding:6px 2px;text-align:center"><div style="font-size:16px;font-weight:700;color:#d97706">${curStreak}</div><div style="font-size:8px;color:#666">🔥连续天数</div></div>
+          <div style="background:#f0f4ff;border-radius:6px;padding:6px 2px;text-align:center"><div style="font-size:16px;font-weight:700;color:#4f46e5">${longStreak}</div><div style="font-size:8px;color:#666">🏆最长连续</div></div>
+          <div style="background:#f0fdf4;border-radius:6px;padding:6px 2px;text-align:center"><div style="font-size:16px;font-weight:700;color:#059669">${tDays}</div><div style="font-size:8px;color:#666">📅总天数</div></div>
+          <div style="background:#fce7f3;border-radius:6px;padding:6px 2px;text-align:center"><div style="font-size:16px;font-weight:700;color:#db2777">${mDays}</div><div style="font-size:8px;color:#666">📊本月天数</div></div>
         </div>`;
-        // 迷你热力图
-        html+=`<div style="margin-bottom:10px"><div style="overflow-x:auto"><svg width="${hWeeks.length*11+15}" height="80" style="font-family:system-ui,sans-serif">`;
-        hWeeks.forEach((w,wi)=>{ w.forEach((day,di)=>{ const x=wi*11+8,y=di*11+2; html+=`<rect x="${x}" y="${y}" width="9" height="9" rx="1.5" fill="${hColor(day.count,day.isFut)}" stroke="${day.isToday?'#ef4444':'#fff'}" stroke-width="${day.isToday?'1':'0.3'}"/>`; }); });
-        html+=`</svg></div></div>`;
-        // 科目 + 时间
+        // 科目统计
         if(sStats.length>0){
-          html+=`<div style="display:flex;gap:8px;margin-bottom:8px"><div style="flex:1"><div style="font-size:10px;font-weight:600;margin-bottom:4px">📚 科目</div>`;
-          sStats.forEach(st=>{ const c=subjectColor(st.name); const pct=tVisits>0?Math.round(st.count/tVisits*100):0;
-            html+=`<div style="display:flex;align-items:center;gap:3px;margin-bottom:2px"><span style="font-size:9px;min-width:35px">${st.name}</span><div style="flex:1;height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${c};border-radius:4px"></div></div><span style="font-size:8px;color:#666;min-width:30px;text-align:right">${st.count}</span></div>`; });
-          html+=`</div>`;
-          // 时间分布
-          const tBars=[{l:'🌅上午',c:ts2.m,col:'#fbbf24'},{l:'☀️下午',c:ts2.a,col:'#f59e0b'},{l:'🌙晚上',c:ts2.e,col:'#6366f1'}].filter(t=>t.c>0);
-          if(tBars.length>0){
-            html+=`<div style="flex:1"><div style="font-size:10px;font-weight:600;margin-bottom:4px">🕐 时间</div>`;
-            tBars.forEach(t=>{ const pct=tVisits>0?Math.round(t.c/tVisits*100):0;
-              html+=`<div style="display:flex;align-items:center;gap:3px;margin-bottom:2px"><span style="font-size:9px;min-width:35px">${t.l}</span><div style="flex:1;height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${t.col};border-radius:4px"></div></div><span style="font-size:8px;color:#666;min-width:30px;text-align:right">${t.c}</span></div>`; });
-            html+=`</div>`;
-          }
+          html+=`<div style="background:#fff;border-radius:6px;padding:8px;margin-bottom:8px"><div style="font-size:10px;font-weight:600;margin-bottom:6px">📚 科目统计</div>`;
+          sStats.forEach(st=>{ const c=subjectColor(st.name);
+            html+=`<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px"><span style="width:6px;height:6px;border-radius:50%;background:${c};flex-shrink:0"></span><span style="font-size:10px;flex:1">${st.name}</span><span style="font-size:9px;color:#666">${st.count}次（${st.days}天）</span></div>`;
+          });
           html+=`</div>`;
         }
-        // 星期分布
-        html+=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">`;
-        for(let i=1;i<=7;i++){ const dw=i%7; const cnt=dwCount[dw]; const h2=Math.max(4,Math.round(cnt/maxDw*28)); const c2=cnt>0?avColor:'#e5e7eb';
-          html+=`<div style="text-align:center"><div style="height:${h2}px;background:${c2};border-radius:1px;margin:0 auto 2px;width:60%"></div><div style="font-size:8px;font-weight:${cnt>0?'600':'400'}">${cnt}</div><div style="font-size:7px;color:#999">${dwLabels[dw]}</div></div>`; }
-        html+=`</div>`;
+        // 最近5条记录
+        const recent=records.slice(0,5);
+        if(recent.length>0){
+          html+=`<div style="background:#fff;border-radius:6px;padding:8px"><div style="font-size:10px;font-weight:600;margin-bottom:6px">📝 最近记录（${recent.length}）</div>`;
+          recent.forEach(r=>{
+            const stu=DB.data.students[r.studentId];
+            const tags=[];
+            if(r.vocab>0) tags.push(`<span style="background:#4f46e515;color:#4f46e5;border-radius:6px;padding:0 4px;font-size:8px">🔤${r.vocab}</span>`);
+            if(r.spell>0) tags.push(`<span style="background:#05966915;color:#059669;border-radius:6px;padding:0 4px;font-size:8px">✍️${r.spell}</span>`);
+            if(r.listening) tags.push(`<span style="background:#d9770615;color:#d97706;border-radius:6px;padding:0 4px;font-size:8px">👂</span>`);
+            if(r.speaking) tags.push(`<span style="background:#dc262615;color:#dc2626;border-radius:6px;padding:0 4px;font-size:8px">🗣️</span>`);
+            html+=`<div style="display:flex;align-items:center;gap:4px;padding:3px 0;border-bottom:1px solid #f3f4f6;font-size:9px">
+              <span style="color:#999;min-width:60px">${r.date.slice(5)}</span>
+              <span style="color:#666;min-width:36px">${r.time||''}</span>
+              <span style="flex:1;color:#374151">${r.subject||'未分类'}${r.note?' · '+r.note:''}</span>
+              <span style="display:flex;gap:2px">${tags.join('')}</span>
+            </div>`;
+          });
+          html+=`</div>`;
+        }
         html+=`</div>`;
       });
     }
@@ -7530,7 +7543,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v34';
+    const sw=`const C='tw-cache-v35';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
