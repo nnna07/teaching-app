@@ -450,7 +450,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
     <div class="view-switch" id="sv-view-switch" style="margin-bottom:8px">
       <button data-svv="people" class="active" onclick="setSvView('people')">👤 个人</button>
       <button data-svv="month" onclick="setSvView('month')">📅 月历</button>
-      <button data-svv="list" onclick="setSvView('list')">📋 列表</button>
+      <button data-svv="list" onclick="setSvView('list')">📊 月汇总</button>
     </div>
     <div id="sv-subject-filter-bar" style="display:flex;gap:5px;overflow-x:auto;padding-bottom:6px;margin-bottom:4px"></div>
     <div id="sv-ck-filter-bar" style="display:flex;gap:5px;overflow-x:auto;padding-bottom:6px;margin-bottom:4px"></div>
@@ -545,8 +545,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.28.1';
-const APP_VERSION_DATE = '2026-08-15';
+const APP_VERSION = 'v3.29.0';
+const APP_VERSION_DATE = '2026-08-20';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -1211,7 +1211,29 @@ $('#modal').addEventListener('click',e=>{ if(e.target.id==='modal') closeModal()
 
 /* ==================== 课次列表 ==================== */
 let lessonsTeacherFilter = 'all';
+let lessonsMultiSelect=false;
+let selectedLessonIds=new Set();
 function setLessonsTeacherFilter(id){ lessonsTeacherFilter=id; renderLessons(); }
+function toggleLessonsMultiSelect(){
+  lessonsMultiSelect=!lessonsMultiSelect;
+  if(!lessonsMultiSelect) selectedLessonIds.clear();
+  renderLessons();
+}
+function toggleLessonSelect(id){
+  if(selectedLessonIds.has(id)) selectedLessonIds.delete(id);
+  else selectedLessonIds.add(id);
+  renderLessons();
+}
+function selectAllLessons(){
+  const lessons=Object.values(DB.data.lessons).filter(l=>!l._deleted);
+  if(lessonsTeacherFilter!=='all') lessons=lessons.filter(l=>lessonAllTeacherIds(l).includes(lessonsTeacherFilter));
+  if(selectedLessonIds.size>=lessons.length){
+    selectedLessonIds.clear();
+  } else {
+    lessons.forEach(l=>selectedLessonIds.add(l.id));
+  }
+  renderLessons();
+}
 
 function renderLessons(){
   // 老师筛选条
@@ -1261,7 +1283,31 @@ function renderLessons(){
     <button class="btn btn-ghost btn-sm" onclick="openBatchAdjust()">⏰ 批量调课</button>
     <button class="btn btn-ghost btn-sm" onclick="dedupLessons()">🔍 去重</button>
     <button class="btn btn-ghost btn-sm" onclick="switchTab('timetable')">📅 时间表</button>
+    <button class="btn btn-sm ${lessonsMultiSelect?'btn-primary':'btn-ghost'}" onclick="toggleLessonsMultiSelect()">${lessonsMultiSelect?'✓ 完成':'☑ 多选'}</button>
   </div>`;
+
+  // 多选模式下的底部操作栏
+  if(lessonsMultiSelect){
+    const selCount=selectedLessonIds.size;
+    html+=`<div style="position:fixed;bottom:0;left:0;right:0;z-index:100;background:var(--card);border-top:1px solid var(--border);box-shadow:0 -2px 10px rgba(0,0,0,.08);padding:8px 12px;padding-bottom:max(8px,env(safe-area-inset-bottom))">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+        <span style="font-size:12px;font-weight:600">已选 ${selCount} 节</span>
+        <button class="btn btn-sm btn-ghost" onclick="selectAllLessons()">全选/反选</button>
+        <button class="btn btn-sm btn-ghost" style="color:var(--red)" onclick="selectedLessonIds.clear();renderLessons()">清空</button>
+      </div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-ghost" ${selCount===0?'disabled':''} onclick="batchShiftDate(1)">📅+1天</button>
+        <button class="btn btn-sm btn-ghost" ${selCount===0?'disabled':''} onclick="batchShiftDate(-1)">📅-1天</button>
+        <button class="btn btn-sm btn-ghost" ${selCount===0?'disabled':''} onclick="batchShiftDate(7)">📅+7天</button>
+        <button class="btn btn-sm btn-ghost" ${selCount===0?'disabled':''} onclick="batchShiftTime(30)">⏰+30分</button>
+        <button class="btn btn-sm btn-ghost" ${selCount===0?'disabled':''} onclick="batchShiftTime(-30)">⏰-30分</button>
+        <button class="btn btn-sm btn-ghost" ${selCount===0?'disabled':''} onclick="batchSetDate()">改日期</button>
+        <button class="btn btn-sm btn-ghost" ${selCount===0?'disabled':''} onclick="batchSetTime()">改时间</button>
+        <button class="btn btn-sm btn-ghost" style="color:#ea580c" ${selCount===0?'disabled':''} onclick="batchLeave()">请假</button>
+        <button class="btn btn-sm btn-danger" ${selCount===0?'disabled':''} onclick="batchDelete()">删除</button>
+      </div>
+    </div>`;
+  }
 
   // 下一节课高亮卡片
   if(nextLesson){
@@ -1367,6 +1413,7 @@ function renderLessons(){
     </div>`;
     groupIdx++;
   }
+  if(lessonsMultiSelect) html+=`<div style="height:120px"></div>`;
   list.innerHTML=html;
 }
 function toggleAllLessons(){
@@ -1388,7 +1435,10 @@ function lessonListItem(l, dateStr){
   const color = teacherColor(l.teacherId);
   const done = isLessonDone(l.id, dateStr);
   const swapPending = hasMark(l.id,'待调课');
-  return `<div class="lesson-item" style="border-left-color:${swapPending?'#ea580c':color};${done?'opacity:.75':''}${swapPending?';background:#fff7ed':''}">
+  const sel=selectedLessonIds.has(l.id);
+  const checkHtml=lessonsMultiSelect?`<div style="width:24px;height:24px;border-radius:6px;border:2px solid ${sel?'var(--primary)':'var(--border)'};background:${sel?'var(--primary)':''};display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;margin-right:6px" onclick="event.stopPropagation();toggleLessonSelect('${l.id}')">${sel?'<span style="color:#fff;font-size:14px;font-weight:700">✓</span>':''}</div>`:'';
+  return `<div class="lesson-item" style="border-left-color:${swapPending?'#ea580c':color};${done?'opacity:.75':''}${swapPending?';background:#fff7ed':''}${sel?';outline:2px solid var(--primary);outline-offset:-2px':''}" ${lessonsMultiSelect?`onclick="toggleLessonSelect('${l.id}')"`:''}>
+    ${checkHtml}
     <div class="l-timeblock" style="background:linear-gradient(135deg,${color}15,${color}08)">
       <div class="ltb-time" style="color:${color}">${l.hhmm}</div>
       <div class="ltb-dur">${l.duration}分钟</div>
@@ -1401,7 +1451,7 @@ function lessonListItem(l, dateStr){
       <div class="l-stus">${stus.length?stus.map(s=>`<span class="stu" onclick="event.stopPropagation();openStudentView('${s.id}')">${s.name}</span>`).join(''):'<span style="color:var(--text3)">未分配学生</span>'}</div>
       ${marks?`<div class="l-marks">${marks}</div>`:''}
       ${l.note?`<div class="l-note">📝 ${l.note}</div>`:''}
-      <div class="l-acts">
+      ${lessonsMultiSelect?'':`<div class="l-acts">
         <button class="btn btn-sm btn-ghost" onclick="toggleLessonDone('${l.id}','${dateStr}')">${done?'取消完成':'完成'}</button>
         <button class="btn btn-sm btn-ghost" onclick="openLessonEdit('${l.id}')">编辑</button>
         <button class="btn btn-sm btn-ghost" onclick="openStudentPick('${l.id}')">学生</button>
@@ -1410,9 +1460,136 @@ function lessonListItem(l, dateStr){
         <button class="btn btn-sm btn-ghost" style="color:var(--primary);font-weight:600" onclick="openSwapLesson('${l.id}')">🔄对调</button>
         <button class="btn btn-sm btn-ghost" style="color:var(--primary);font-weight:600" onclick="openLessonAddNext('${l.id}')">➕续排</button>
         <button class="btn btn-sm btn-danger" onclick="delLesson('${l.id}')">删除</button>
-      </div>
+      </div>`}
     </div>
   </div>`;
+}
+
+/* ==================== 批量调课操作 ==================== */
+function batchShiftDate(days){
+  if(selectedLessonIds.size===0){ toast('请先选择课次'); return; }
+  let changed=0;
+  selectedLessonIds.forEach(id=>{
+    const l=DB.data.lessons[id]; if(!l||l._deleted) return;
+    if(l.mode==='single' && l.date){
+      const d=new Date(l.date+'T00:00:00'); d.setDate(d.getDate()+days);
+      l.date=fmtDate(d); l.weekday=dayOfWeek(l.date);
+      // 同步session
+      const s=getSessionForLessonDate(id, l.date);
+      if(s){ s.date=l.date; s.updatedAt=now(); putSession(s); }
+      // 旧日期的session也要更新
+      const oldDate=fmtDate(new Date(d.getTime()-days*86400000));
+      const oldS=getSessionForLessonDate(id, oldDate);
+      if(oldS && oldS.status!=='done'){ oldS.date=l.date; oldS.updatedAt=now(); putSession(oldS); }
+      l.updatedAt=now(); changed++;
+    }
+  });
+  DB.save(); renderLessons(); toast(`已调整 ${changed} 节课次日期${days>0?'推迟':'提前'}${Math.abs(days)}天`);
+}
+function batchShiftTime(minutes){
+  if(selectedLessonIds.size===0){ toast('请先选择课次'); return; }
+  let changed=0;
+  selectedLessonIds.forEach(id=>{
+    const l=DB.data.lessons[id]; if(!l||l._deleted) return;
+    const [h,m]=l.hhmm.split(':').map(Number);
+    let total=h*60+m+minutes;
+    if(total<0) total+=1440; if(total>=1440) total-=1440;
+    l.hhmm=pad2(Math.floor(total/60))+':'+pad2(total%60);
+    l.updatedAt=now(); changed++;
+  });
+  DB.save(); renderLessons(); toast(`已调整 ${changed} 节课次时间${minutes>0?'+':'-'}${Math.abs(minutes)}分钟`);
+}
+function batchSetDate(){
+  if(selectedLessonIds.size===0){ toast('请先选择课次'); return; }
+  let html=`<div style="margin-bottom:12px">
+    <div style="font-size:14px;font-weight:600;text-align:center;margin-bottom:4px">批量改日期</div>
+    <div style="font-size:11px;color:var(--text3);text-align:center">将选中的 ${selectedLessonIds.size} 节单次课次改为指定日期</div>
+  </div>
+  <div class="form-row"><label>目标日期</label><input type="date" class="form-control" id="batch-date" value="${todayStr()}"></div>
+  <div class="form-row"><label>调整方式</label>
+    <select class="form-control" id="batch-date-mode">
+      <option value="set">设为指定日期</option>
+      <option value="shift">推迟/提前到指定日期</option>
+    </select>
+  </div>`;
+  const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="doBatchSetDate()">确定</button>`;
+  openModal(html,footer);
+  setSheetTitle('📅 批量改日期');
+}
+function doBatchSetDate(){
+  const targetDate=$('#batch-date').value;
+  const mode=$('#batch-date-mode').value;
+  if(!targetDate){ toast('请选择日期'); return; }
+  let changed=0;
+  selectedLessonIds.forEach(id=>{
+    const l=DB.data.lessons[id]; if(!l||l._deleted||l.mode!=='single') return;
+    if(mode==='set'){
+      l.date=targetDate;
+    } else {
+      const oldD=new Date(l.date+'T00:00:00'); const newD=new Date(targetDate+'T00:00:00');
+      const diff=Math.round((newD-oldD)/86400000);
+      const d=new Date(l.date+'T00:00:00'); d.setDate(d.getDate()+diff);
+      l.date=fmtDate(d);
+    }
+    l.weekday=dayOfWeek(l.date);
+    const s=getSessionForLessonDate(id, l.date);
+    if(s){ s.date=l.date; s.updatedAt=now(); putSession(s); }
+    l.updatedAt=now(); changed++;
+  });
+  DB.save(); closeModal(); renderLessons(); toast(`已将 ${changed} 节课次日期改为 ${targetDate}`);
+}
+function batchSetTime(){
+  if(selectedLessonIds.size===0){ toast('请先选择课次'); return; }
+  let html=`<div style="margin-bottom:12px">
+    <div style="font-size:14px;font-weight:600;text-align:center;margin-bottom:4px">批量改时间</div>
+    <div style="font-size:11px;color:var(--text3);text-align:center">将选中的 ${selectedLessonIds.size} 节课次改为指定时间</div>
+  </div>
+  <div class="form-row"><label>开始时间</label><input type="time" class="form-control" id="batch-time" value="09:00"></div>`;
+  const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="doBatchSetTime()">确定</button>`;
+  openModal(html,footer);
+  setSheetTitle('⏰ 批量改时间');
+}
+function doBatchSetTime(){
+  const t=$('#batch-time').value;
+  if(!t){ toast('请选择时间'); return; }
+  let changed=0;
+  selectedLessonIds.forEach(id=>{
+    const l=DB.data.lessons[id]; if(!l||l._deleted) return;
+    l.hhmm=t; l.updatedAt=now(); changed++;
+  });
+  DB.save(); closeModal(); renderLessons(); toast(`已将 ${changed} 节课次时间改为 ${t}`);
+}
+function batchLeave(){
+  if(selectedLessonIds.size===0){ toast('请先选择课次'); return; }
+  let changed=0;
+  selectedLessonIds.forEach(id=>{
+    const l=DB.data.lessons[id]; if(!l||l._deleted) return;
+    const ds=l.mode==='single'?(l.date||todayStr()):nextOccurrence(l);
+    const s=getSessionForLessonDate(id, ds)||{};
+    if(s.status!=='leave'){ s.status='leave'; putSession(s); changed++; }
+  });
+  DB.save(); renderLessons(); toast(`已将 ${changed} 节课次标记为请假`);
+}
+function batchDelete(){
+  if(selectedLessonIds.size===0){ toast('请先选择课次'); return; }
+  const count=selectedLessonIds.size;
+  let html=`<div style="text-align:center;padding:16px">
+    <div style="font-size:36px;margin-bottom:8px">⚠️</div>
+    <div style="font-size:14px;font-weight:600;margin-bottom:4px">确认删除 ${count} 节课次？</div>
+    <div style="font-size:12px;color:var(--text3)">此操作不可撤销</div>
+  </div>`;
+  const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-danger" style="flex:1" onclick="doBatchDelete()">删除 ${count} 节</button>`;
+  openModal(html,footer);
+  setSheetTitle('🗑️ 批量删除');
+}
+function doBatchDelete(){
+  let count=0;
+  selectedLessonIds.forEach(id=>{
+    const l=DB.data.lessons[id]; if(!l||l._deleted) return;
+    l._deleted=true; l.updatedAt=now(); count++;
+  });
+  selectedLessonIds.clear();
+  DB.save(); closeModal(); renderLessons(); toast(`已删除 ${count} 节课次`);
 }
 
 /* ==================== 快速续排课次 ==================== */
@@ -2706,7 +2883,7 @@ function showSvPersonDetail(studentId){
   const subjStats=Object.entries(subjMap).map(([name,v])=>({name,count:v.count,days:v.days.size})).sort((a,b)=>b.count-a.count);
   // 头像颜色
   const avatarColor=subjStats.length>0?subjectColor(subjStats[0].name):'#4f46e5';
-  // 最近30天打卡日历（显示单词个数）
+  // 最近30天打卡日历（颜色按个人比例分桶）
   const calEnd=new Date(today+'T00:00:00');
   const calStart=new Date(calEnd); calStart.setDate(calStart.getDate()-29);
   const calDays=[];
@@ -2716,6 +2893,17 @@ function showSvPersonDetail(studentId){
     const vocabCount=recs.reduce((sum,s)=>sum+(s.vocab||0),0);
     calDays.push({date:ds,count:recs.length,vocab:vocabCount,isToday:ds===today});
   }
+  // 以该学生自身最高单词数为基准分5级
+  const maxVocab=Math.max(1,...calDays.map(d=>d.vocab));
+  const calColor=(cd)=>{
+    if(cd.count===0) return '#f3f4f6';
+    if(cd.vocab===0) return '#bbf7d0';
+    const r=cd.vocab/maxVocab;
+    if(r<=0.25) return '#a7f3d0';
+    if(r<=0.50) return '#4ade80';
+    if(r<=0.75) return '#16a34a';
+    return '#15803d';
+  };
   const dowCN=['日','一','二','三','四','五','六'];
   const calStartStr=calStart.toISOString().slice(5,10).replace('-','/');
   const calEndStr=today.slice(5).replace('-','/');
@@ -2745,7 +2933,7 @@ function showSvPersonDetail(studentId){
     <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:3px">`;
   calDays.forEach(cd=>{
     const vocab=cd.vocab;
-    const bg=cd.count===0?'#f3f4f6':vocab===0?'#a7f3d0':vocab<20?'#34d399':'#059669';
+    const bg=calColor(cd);
     const fg=cd.count===0?'var(--text3)':'#fff';
     const dayNum=parseInt(cd.date.slice(8));
     const dDow=new Date(cd.date+'T00:00:00').getDay();
@@ -2759,11 +2947,13 @@ function showSvPersonDetail(studentId){
     <div style="display:flex;align-items:center;gap:5px;margin-top:6px;font-size:9px;color:var(--text3)">
       <span>少</span>
       <div style="width:10px;height:10px;border-radius:2px;background:#f3f4f6"></div>
+      <div style="width:10px;height:10px;border-radius:2px;background:#bbf7d0"></div>
       <div style="width:10px;height:10px;border-radius:2px;background:#a7f3d0"></div>
-      <div style="width:10px;height:10px;border-radius:2px;background:#34d399"></div>
-      <div style="width:10px;height:10px;border-radius:2px;background:#059669"></div>
+      <div style="width:10px;height:10px;border-radius:2px;background:#4ade80"></div>
+      <div style="width:10px;height:10px;border-radius:2px;background:#16a34a"></div>
+      <div style="width:10px;height:10px;border-radius:2px;background:#15803d"></div>
       <span>多</span>
-      <span style="margin-left:6px">${calStartStr} ~ ${calEndStr}</span>
+      <span style="margin-left:6px">${calStartStr} ~ ${calEndStr} · 按个人最高${maxVocab}词分档</span>
     </div>
   </div>`;
   // 学习打卡汇总
@@ -2858,56 +3048,96 @@ function toggleSvRecent(total, initCount){
 /* ---- 列表视图 ---- */
 function renderSupervisionList(list){
   const cont=$('#supervision-content');
-  $('#sv-nav-box').innerHTML='';
-  if(list.length===0){
-    cont.innerHTML=`<div class="card"><div class="empty" style="padding:30px"><div class="em-ico">📍</div><div style="margin-top:8px">还没有督学打卡记录</div><div style="font-size:12px;color:var(--text3);margin-top:4px">点击上方"+ 记录来访"记录哪个学生来找你了</div></div></div>`;
+  const {dates,monthLabel,year,month}=getMonthDates(svMonthOffset);
+  $('#sv-nav-box').innerHTML=`<div class="rec-nav">
+    <button class="rn-btn" onclick="shiftSvMonth(-1)">&#8249;</button>
+    <span class="rn-lbl">${monthLabel}</span>
+    <button class="rn-btn" onclick="shiftSvMonth(1)">&#8250;</button>
+    <button class="rn-today" onclick="goSvThisMonth()">本月</button>
+  </div>`;
+  const monthPrefix=`${year}-${pad2(month+1)}-`;
+  const monthList=list.filter(s=>s.date.startsWith(monthPrefix));
+  if(monthList.length===0){
+    cont.innerHTML=`<div class="card"><div class="empty" style="padding:30px"><div class="em-ico">📊</div><div style="margin-top:8px">${monthLabel}暂无打卡记录</div></div></div>`;
     return;
   }
-  const grouped={};
-  list.forEach(s=>{ if(!grouped[s.date]) grouped[s.date]=[]; grouped[s.date].push(s); });
-  const dates=Object.keys(grouped).sort((a,b)=>b.localeCompare(a));
+  const studentIds=[...new Set(monthList.map(s=>s.studentId))];
+  const todayStr_=todayStr();
+  const stats=studentIds.map(sid=>{
+    const stu=DB.data.students[sid];
+    const recs=monthList.filter(s=>s.studentId===sid);
+    const monthDays=new Set(recs.map(s=>s.date)).size;
+    const vocabTotal=recs.reduce((a,r)=>a+(r.vocab||0),0);
+    const spellTotal=recs.reduce((a,r)=>a+(r.spell||0),0);
+    const listenDays=recs.filter(r=>r.listening).length;
+    const speakDays=recs.filter(r=>r.speaking).length;
+    const dayMap={};
+    recs.forEach(r=>{ if(!dayMap[r.date]) dayMap[r.date]={vocab:0,count:0}; dayMap[r.date].vocab+=r.vocab||0; dayMap[r.date].count++; });
+    const allDates=[...new Set(list.filter(s=>s.studentId===sid).map(s=>s.date))].sort();
+    let streak=0;
+    for(let i=0;i<allDates.length;i++){
+      const d=allDates[allDates.length-1-i];
+      const expected=new Date(todayStr_+'T00:00:00'); expected.setDate(expected.getDate()-streak);
+      if(d===fmtDate(expected)) streak++; else break;
+    }
+    return {sid,name:stu&&!stu._deleted?stu.name:'(已删除)',grade:stu&&!stu._deleted?(stu.grade||''):'',deleted:stu?stu._deleted:true,recs,monthDays,vocabTotal,spellTotal,listenDays,speakDays,dayMap,streak};
+  }).sort((a,b)=>b.vocabTotal-a.vocabTotal || b.monthDays-a.monthDays);
   let html='';
-  dates.forEach(date=>{
-    const items=grouped[date];
-    const isToday=date===todayStr();
-    const wd=dayOfWeek(date);
-    const bySubject={};
-    items.forEach(s=>{ const k=s.subject||'未分类'; if(!bySubject[k]) bySubject[k]=[]; bySubject[k].push(s); });
-    html+=`<div style="margin-bottom:14px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:0 2px">
-        <span style="font-size:13px;font-weight:700;color:${isToday?'var(--primary)':'var(--text)'}">${date.slice(5)}${isToday?' (今天)':''}</span>
-        <span style="font-size:10px;color:var(--text3)">${dayNames[wd]}</span>
-        <span style="font-size:11px;color:var(--text3);margin-left:auto">${items.length}人次</span>
+  stats.forEach(st=>{
+    const maxV=Math.max(1,...Object.values(st.dayMap).map(d=>d.vocab));
+    const cellColor=(dayData)=>{
+      if(!dayData) return '#f0f1f3';
+      if(dayData.vocab===0) return '#bbf7d0';
+      const r=dayData.vocab/maxV;
+      if(r<=0.25) return '#a7f3d0';
+      if(r<=0.50) return '#4ade80';
+      if(r<=0.75) return '#16a34a';
+      return '#15803d';
+    };
+    let cellsHtml='';
+    dates.forEach(d=>{
+      const dd=st.dayMap[d.date];
+      const bg=cellColor(dd);
+      const has=!!dd;
+      const isToday=d.date===todayStr_;
+      const dayNum=parseInt(d.date.slice(8));
+      cellsHtml+=`<div style="min-width:18px;height:24px;border-radius:3px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:${bg};color:${has?'#fff':'var(--text3)'};font-size:7px;font-weight:600;${d.other?'opacity:.3':''}${isToday?'box-shadow:0 0 0 1px var(--red)':''}${has?'cursor:pointer':''}" ${has?`onclick="showSvPersonDay('${st.sid}','${d.date}')"`:''}>
+        <span style="line-height:1;font-size:6px;opacity:.7">${dayNum}</span>
+        <span style="line-height:1;font-size:8px">${has?(dd.vocab>0?dd.vocab:'\u2713'):''}</span>
       </div>`;
-    Object.keys(bySubject).sort().forEach(subjName=>{
-      const subjItems=bySubject[subjName];
-      const color=subjectColor(subjName);
-      html+=`<div style="margin-bottom:6px">
-        <div style="display:flex;align-items:center;gap:5px;padding:2px 4px;margin-bottom:3px">
-          <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0"></span>
-          <span style="font-size:11px;font-weight:600;color:${color}">${subjName}</span>
-          <span style="font-size:10px;color:var(--text3)">${subjItems.length}人</span>
-        </div>`;
-      subjItems.forEach(s=>{
-        const stu=DB.data.students[s.studentId];
-        html+=`<div class="card" style="border-left:3px solid ${color};margin-left:12px;padding:8px 12px">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start">
-            <div style="min-width:0;flex:1">
-              <div style="font-weight:600;font-size:13px">${stu&&!stu._deleted?stu.name:'(学生已删除)'}</div>
-              <div style="font-size:11px;color:var(--text3);margin-top:2px">${s.time?'🕐 '+s.time:''}${s.note?' · 📝 '+s.note:''}</div>
-              ${(s.vocab>0||s.spell>0||s.listening||s.speaking)?`<div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap">${s.vocab>0?'<span style="background:#4f46e515;color:#4f46e5;border-radius:8px;padding:1px 5px;font-size:9px">🔤'+s.vocab+'</span>':''}${s.spell>0?'<span style="background:#05966915;color:#059669;border-radius:8px;padding:1px 5px;font-size:9px">✍️'+s.spell+'</span>':''}${s.listening?'<span style="background:#d9770615;color:#d97706;border-radius:8px;padding:1px 5px;font-size:9px">👂</span>':''}${s.speaking?'<span style="background:#dc262615;color:#dc2626;border-radius:8px;padding:1px 5px;font-size:9px">🗣️</span>':''}</div>`:''}
-            </div>
-            <div style="display:flex;gap:4px;flex-shrink:0">
-              <button class="btn btn-sm btn-ghost" onclick="editSupervision('${s.id}')">编辑</button>
-              <button class="btn btn-sm btn-danger" onclick="delSupervision('${s.id}')">删除</button>
-            </div>
-          </div>
-        </div>`;
-      });
-      html+=`</div>`;
     });
-    html+=`</div>`;
+    html+=`<div class="card" style="margin-bottom:8px;padding:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <div style="width:28px;height:28px;border-radius:50%;background:#4f46e520;color:#4f46e5;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0">${st.name.charAt(0)}</div>
+        <div style="flex:1;min-width:0;cursor:pointer" onclick="showSvPersonDetail('${st.sid}')">
+          <div style="font-weight:600;font-size:13px">${st.name}</div>
+          <div style="font-size:9px;color:var(--text3)">${st.grade||''}</div>
+        </div>
+        <div style="display:flex;gap:6px;font-size:10px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">
+          <span style="color:var(--text2)">📅<b>${st.monthDays}</b>天</span>
+          ${st.vocabTotal>0?`<span style="color:#4f46e5">🔤<b>${st.vocabTotal}</b></span>`:''}
+          ${st.spellTotal>0?`<span style="color:#059669">✍️<b>${st.spellTotal}</b></span>`:''}
+          ${st.listenDays>0?`<span style="color:#d97706">👂<b>${st.listenDays}</b></span>`:''}
+          ${st.speakDays>0?`<span style="color:#dc2626">🗣️<b>${st.speakDays}</b></span>`:''}
+          ${st.streak>0?`<span style="color:var(--amber)">🔥<b>${st.streak}</b></span>`:''}
+        </div>
+      </div>
+      <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px">
+        <div style="display:flex;gap:1px;min-width:max-content">${cellsHtml}</div>
+      </div>
+    </div>`;
   });
+  html+=`<div style="display:flex;align-items:center;gap:4px;margin-top:8px;font-size:9px;color:var(--text3);justify-content:center">
+    <span>少</span>
+    <div style="width:10px;height:10px;border-radius:2px;background:#f0f1f3"></div>
+    <div style="width:10px;height:10px;border-radius:2px;background:#bbf7d0"></div>
+    <div style="width:10px;height:10px;border-radius:2px;background:#a7f3d0"></div>
+    <div style="width:10px;height:10px;border-radius:2px;background:#4ade80"></div>
+    <div style="width:10px;height:10px;border-radius:2px;background:#16a34a"></div>
+    <div style="width:10px;height:10px;border-radius:2px;background:#15803d"></div>
+    <span>多</span>
+    <span style="margin-left:4px">颜色按每人当月最高单词数分档</span>
+  </div>`;
   cont.innerHTML=html;
 }
 /* ---- 月历视图 ---- */
@@ -3172,11 +3402,8 @@ function openSvExport(){
       <label>内容</label>
       <select class="form-control" id="sv-exp-mode" onchange="updateSvExportPreview()">
         <option value="all">📊 全部统计（多人汇总+个人明细）</option>
-        <option value="summary">📈 仅多人汇总统计</option>
         <option value="personal">👤 仅个人明细</option>
         <option value="daily">📅 当天详情（一天记录列表）</option>
-        <option value="heatmap">🔥 热力图日历（贡献图风格）</option>
-        <option value="weekcards">📅 周报卡片（按周汇总）</option>
         <option value="personal_detail">👤 个人详情报告（每人一张完整卡片）</option>
       </select>
     </div>
@@ -3286,7 +3513,7 @@ function updateSvExportPreview(){
       <div style="font-size:10px;color:#999;margin-top:2px">生成于 ${todayStr()}</div>
     </div>`;
   // 汇总统计
-  if(mode==='all'||mode==='summary'){
+  if(mode==='all'){
     html+=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">`;
     html+=`<div style="background:#f0f4ff;border-radius:8px;padding:10px;text-align:center"><div style="font-size:22px;font-weight:700;color:#4f46e5">${totalRecords}</div><div style="font-size:10px;color:#666">总打卡次数</div></div>`;
     html+=`<div style="background:#f0fdf4;border-radius:8px;padding:10px;text-align:center"><div style="font-size:22px;font-weight:700;color:#059669">${totalDays}</div><div style="font-size:10px;color:#666">打卡天数</div></div>`;
@@ -3373,161 +3600,6 @@ function updateSvExportPreview(){
       });
     }
     html+=`</div>`;
-  }
-  // 热力图日历模式
-  if(mode==='heatmap'){
-    const {from,to}=getSvExportData();
-    let dList=list.map(s=>s.date).sort();
-    const minDate=from || (dList[0]||todayStr());
-    const maxDate=to || (dList[dList.length-1]||todayStr());
-    const start=new Date(minDate+'T00:00:00');
-    const end=new Date(maxDate+'T00:00:00');
-    // 对齐到周一
-    const startDay=start.getDay();
-    const startMonday=new Date(start);
-    startMonday.setDate(start.getDate() - (startDay===0?6:startDay-1));
-    // 统计每天打卡数
-    const dateCount={};
-    list.forEach(s=>{ dateCount[s.date]=(dateCount[s.date]||0)+1; });
-    const maxCount=Math.max(1, ...Object.values(dateCount));
-    // 生成格子
-    const weeks=[];
-    let cur=new Date(startMonday);
-    while(cur<=end){
-      const week=[];
-      for(let i=0;i<7;i++){
-        const ds=fmtDate(cur);
-        if(ds>=minDate && ds<=maxDate){
-          const c=dateCount[ds]||0;
-          week.push({date:ds, count:c});
-        } else {
-          week.push({date:ds, count:-1}); // 范围外
-        }
-        cur.setDate(cur.getDate()+1);
-      }
-      weeks.push(week);
-    }
-    // 热力颜色
-    const heatColor = c => {
-      if(c<0) return '#f3f4f6';
-      if(c===0) return '#ebedf0';
-      const ratio=c/maxCount;
-      if(ratio<=0.25) return '#c6e9c0';
-      if(ratio<=0.5) return '#7bc77b';
-      if(ratio<=0.75) return '#2d9e2d';
-      return '#156515';
-    };
-    const monthNames=['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
-    let monthLabels='';
-    let lastMonth=-1;
-    weeks.forEach((w,i)=>{
-      const firstDay=new Date(w[0].date+'T00:00:00');
-      const m=firstDay.getMonth();
-      if(m!==lastMonth){ monthLabels+=`<text x="${i*14+10}" y="10" style="font-size:10px;fill:#666">${monthNames[m]}</text>`; lastMonth=m; }
-    });
-    const wdLabels=['一','二','三','四','五','六','日'];
-    html+=`<div style="margin-bottom:14px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">🔥 打卡热力图</div>`;
-    html+=`<div style="overflow-x:auto"><svg width="${weeks.length*14+30}" height="120" style="font-family:system-ui,sans-serif">`;
-    // 月份标签
-    html+=`<g>${monthLabels}</g>`;
-    // 星期标签
-    for(let i=0;i<7;i++){
-      if(i%2===1) html+=`<text x="0" y="${i*14+16}" style="font-size:9px;fill:#999">${wdLabels[i]}</text>`;
-    }
-    // 格子
-    weeks.forEach((w,wi)=>{
-      w.forEach((day,di)=>{
-        const x=wi*14+12, y=di*14+4;
-        html+=`<rect x="${x}" y="${y}" width="11" height="11" rx="2" fill="${heatColor(day.count)}" stroke="${day.date===todayStr()?'#ef4444':'#fff'}" stroke-width="${day.date===todayStr()?'1.5':'0.5'}" ${day.count>=0?`<title>${day.date}: ${day.count}次</title>`:''}/>`;
-      });
-    });
-    html+=`</svg></div>`;
-    // 图例
-    html+=`<div style="display:flex;align-items:center;gap:4px;margin-top:8px;font-size:10px;color:#666">少`;
-    [0,0.25,0.5,0.75,1].forEach(r=>{
-      const c = r===0?'#ebedf0':r<=0.25?'#c6e9c0':r<=0.5?'#7bc77b':r<=0.75?'#2d9e2d':'#156515';
-      html+=`<div style="width:11px;height:11px;border-radius:2px;background:${c}"></div>`;
-    });
-    html+=`多 &nbsp; 共${weeks.length}周 · 最高${maxCount}次/天</div></div>`;
-  }
-  // 周报卡片模式
-  if(mode==='weekcards'){
-    const {from,to}=getSvExportData();
-    let dList=list.map(s=>s.date).sort();
-    const minDate=from || (dList[0]||todayStr());
-    const maxDate=to || (dList[dList.length-1]||todayStr());
-    const dateCount={}, dateStudents={}, dateSubjects={};
-    list.forEach(s=>{
-      dateCount[s.date]=(dateCount[s.date]||0)+1;
-      if(!dateStudents[s.date]) dateStudents[s.date]=new Set();
-      dateStudents[s.date].add(s.studentId);
-      if(!dateSubjects[s.date]) dateSubjects[s.date]=new Set();
-      dateSubjects[s.date].add(s.subject||'未分类');
-    });
-    // 按周分组
-    const start=new Date(minDate+'T00:00:00');
-    const end=new Date(maxDate+'T00:00:00');
-    const startDay=start.getDay();
-    const startMonday=new Date(start);
-    startMonday.setDate(start.getDate() - (startDay===0?6:startDay-1));
-    const weekCards=[];
-    let cur=new Date(startMonday);
-    while(cur<=end){
-      const weekDates=[];
-      let weekTotal=0, weekPeople=new Set(), weekSubjects=new Set();
-      for(let i=0;i<7;i++){
-        const ds=fmtDate(cur);
-        if(ds>=minDate && ds<=maxDate){
-          weekDates.push({date:ds, count:dateCount[ds]||0, isToday:ds===todayStr()});
-          weekTotal+=dateCount[ds]||0;
-          if(dateStudents[ds]) dateStudents[ds].forEach(s=>weekPeople.add(s));
-          if(dateSubjects[ds]) dateSubjects[ds].forEach(s=>weekSubjects.add(s));
-        }
-        cur.setDate(cur.getDate()+1);
-      }
-      if(weekTotal>0){
-        weekCards.push({dates:weekDates, total:weekTotal, people:weekPeople.size, subjects:[...weekSubjects]});
-      }
-    }
-    html+=`<div style="margin-bottom:14px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">📅 周报卡片（共${weekCards.length}周有记录）</div>`;
-    if(weekCards.length===0){
-      html+=`<div style="color:#999;font-size:12px;padding:8px;text-align:center">暂无数据</div>`;
-    } else {
-      weekCards.slice(-12).reverse().forEach(wc=>{
-        const firstDate=wc.dates[0].date, lastDate=wc.dates[wc.dates.length-1].date;
-        const totalDays=wc.dates.filter(d=>d.count>0).length;
-        const maxDay=wc.dates.reduce((mx,d)=>Math.max(mx,d.count),0);
-        html+=`<div style="background:#f8f9fa;border-radius:8px;padding:10px;margin-bottom:8px;border:1px solid #e5e7eb">`;
-        html+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <span style="font-size:12px;font-weight:600;color:#333">${firstDate.slice(5)} ~ ${lastDate.slice(5)}</span>
-          <span style="font-size:11px;color:#666">${wc.total}人次 · ${totalDays}天 · ${wc.people}学生</span>
-        </div>`;
-        // 7天小热力条
-        html+=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:6px">`;
-        const wdShort=['一','二','三','四','五','六','日'];
-        wc.dates.forEach((d,i)=>{
-          const c=d.count;
-          let bg = c===0?'#e5e7eb':c<=2?'#bbf7d0':c<=5?'#4ade80':c<=10?'#16a34a':'#14532d';
-          let tc = c>5?'#fff':'#333';
-          html+=`<div style="background:${bg};color:${tc};border-radius:4px;padding:4px 2px;text-align:center">
-            <div style="font-size:8px;opacity:.7">${wdShort[i]}</div>
-            <div style="font-size:12px;font-weight:700">${c}</div>
-          </div>`;
-        });
-        html+='</div>';
-        // 科目标签
-        if(wc.subjects.length>0){
-          html+=`<div style="display:flex;flex-wrap:wrap;gap:4px">`;
-          wc.subjects.forEach(s=>{
-            const color=subjectColor(s);
-            html+=`<span style="background:${color}20;color:${color};border-radius:10px;padding:1px 6px;font-size:9px">${s}</span>`;
-          });
-          html+='</div>';
-        }
-        html+='</div>';
-      });
-    }
-    html+='</div>';
   }
   // 个人详情报告模式
   if(mode==='personal_detail'){
@@ -7734,7 +7806,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v37';
+    const sw=`const C='tw-cache-v38';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
