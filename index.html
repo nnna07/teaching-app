@@ -544,8 +544,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.30.2';
-const APP_VERSION_DATE = '2026-08-21';
+const APP_VERSION = 'v3.30.3';
+const APP_VERSION_DATE = '2026-08-22';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -2340,12 +2340,11 @@ function renderSupervisions(){
   const list=getFilteredSvList();
   const todayStr_=todayStr();
   const todayList=list.filter(s=>s.date===todayStr_);
-  const thisWeekList=list.filter(s=>{
-    const d=new Date(s.date+'T00:00:00');
-    const today=new Date(todayStr_+'T00:00:00');
-    const diff=(today-d)/86400000;
-    return diff>=0 && diff<7;
-  });
+  // 本周（周一至今）
+  const _tw=new Date(todayStr_+'T00:00:00');
+  const _monday=new Date(_tw); _monday.setDate(_tw.getDate()-(_tw.getDay()===0?6:_tw.getDay()-1));
+  const _mondayStr=fmtDate(_monday);
+  const thisWeekList=list.filter(s=>s.date>=_mondayStr && s.date<=todayStr_);
   // 统计打卡数据
   const todayCk=list.filter(s=>s.date===todayStr_);
   let vocabToday=0, spellToday=0, listenToday=0, speakToday=0;
@@ -2356,11 +2355,23 @@ function renderSupervisions(){
     if(s.speaking) speakToday++;
   });
   const hasCk = vocabToday>0||spellToday>0||listenToday>0||speakToday>0;
+  const weekStudents=new Set(thisWeekList.map(s=>s.studentId)).size;
+  let weekVocab=0, weekSpell=0; const weekListenD=new Set(), weekSpeakD=new Set(), weekCkD=new Set();
+  thisWeekList.forEach(s=>{
+    weekVocab+=s.vocab||0; weekSpell+=s.spell||0;
+    if(s.listening) weekListenD.add(s.date);
+    if(s.speaking) weekSpeakD.add(s.date);
+    if((s.vocab||0)>0||(s.spell||0)>0||s.listening||s.speaking) weekCkD.add(s.date);
+  });
   let statsHtml=`
     <div class="stat-card"><div class="s-num">${list.length}</div><div class="s-lbl">总记录</div></div>
     <div class="stat-card"><div class="s-num">${todayList.length}</div><div class="s-lbl">今日来访</div></div>
     <div class="stat-card"><div class="s-num">${thisWeekList.length}</div><div class="s-lbl">本周来访</div></div>
-    <div class="stat-card"><div class="s-num">${new Set(list.map(s=>s.studentId)).size}</div><div class="s-lbl">来访学生</div></div>`;
+    <div class="stat-card"><div class="s-num">${weekStudents}</div><div class="s-lbl">本周学生</div></div>
+    <div class="stat-card"><div class="s-num" style="color:#4f46e5">${weekVocab}</div><div class="s-lbl">🔤本周单词</div></div>
+    <div class="stat-card"><div class="s-num" style="color:#059669">${weekSpell}</div><div class="s-lbl">✍️本周拼写</div></div>
+    <div class="stat-card"><div class="s-num" style="color:#d97706">${weekListenD.size}</div><div class="s-lbl">👂听力天</div></div>
+    <div class="stat-card"><div class="s-num" style="color:#dc2626">${weekSpeakD.size}</div><div class="s-lbl">🗣️口语天</div></div>`;
   $('#supervision-stats').innerHTML=statsHtml;
   if(svView==='month'){
     renderSupervisionMonth(list);
@@ -3052,6 +3063,7 @@ function renderSupervisionMonth(list){
     <span class="rn-lbl">${monthLabel}</span>
     <button class="rn-btn" onclick="shiftSvMonth(1)">›</button>
     <button class="rn-today" onclick="goSvThisMonth()">本月</button>
+    <button class="rn-today" onclick="exportSvMonth()">📤 导出</button>
   </div>`;
   const monthPrefix=`${year}-${pad2(month+1)}-`;
   const monthList=list.filter(s=>s.date.startsWith(monthPrefix));
@@ -3096,6 +3108,34 @@ function renderSupervisionMonth(list){
   });
   html+=`</div></div>`;
   cont.innerHTML=html;
+}
+// 导出月历视图为图片
+function exportSvMonth(){
+  const cal=document.querySelector('#supervision-content .heat-cal');
+  if(!cal){ toast('月历内容为空'); return; }
+  const {monthLabel}=getMonthDates(svMonthOffset);
+  const wrap=document.createElement('div');
+  wrap.style.cssText='position:fixed;left:-99999px;top:0;width:420px;background:#fff;z-index:-1';
+  const inner=document.createElement('div');
+  inner.style.cssText='background:#fff;color:#1a1a1a;padding:16px;font-family:system-ui,sans-serif';
+  inner.innerHTML=`<div style="text-align:center;margin-bottom:10px"><div style="font-size:16px;font-weight:700">📍 督学打卡月历</div><div style="font-size:12px;color:#666;margin-top:3px">${monthLabel}</div></div>`;
+  inner.appendChild(cal.cloneNode(true));
+  wrap.appendChild(inner);
+  document.body.appendChild(wrap);
+  toast('正在生成图片...');
+  ensureHtml2Canvas(()=>{
+    html2canvas(inner,{scale:2,backgroundColor:'#ffffff',useCORS:true}).then(canvas=>{
+      wrap.remove();
+      const a=document.createElement('a');
+      a.download=`督学打卡_月历_${monthLabel}.png`;
+      a.href=canvas.toDataURL('image/png');
+      a.click();
+      toast('已保存到下载');
+    }).catch(e=>{
+      wrap.remove();
+      toast('导出失败：'+e.message);
+    });
+  });
 }
 function showSvDay(date){
   const list=getFilteredSvList().filter(s=>s.date===date).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
@@ -3143,6 +3183,32 @@ function showSvDay(date){
   openModal(html,footer);
   setSheetTitle('📍 '+date.slice(5)+' 打卡详情');
 }
+// 共享 html2canvas 加载器：多CDN兜底（国内npmmirror优先），带队列防重复加载
+function ensureHtml2Canvas(cb){
+  if(typeof html2canvas!=='undefined'){ cb(); return; }
+  if(window._h2cQueue){ window._h2cQueue.push(cb); return; }
+  window._h2cQueue=[cb];
+  const urls=[
+    'https://registry.npmmirror.com/html2canvas/1.4.1/files/dist/html2canvas.min.js',
+    'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js',
+    'https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js'
+  ];
+  let i=0;
+  const tryNext=()=>{
+    if(i>=urls.length){
+      const q=window._h2cQueue||[]; window._h2cQueue=null;
+      toast('图片生成库加载失败，请检查网络后重试');
+      q.forEach(f=>{try{f();}catch(e){}});
+      return;
+    }
+    const s=document.createElement('script');
+    s.src=urls[i++];
+    s.onload=()=>{ const q=window._h2cQueue||[]; window._h2cQueue=null; q.forEach(f=>f()); };
+    s.onerror=()=>{ s.remove(); tryNext(); };
+    document.head.appendChild(s);
+  };
+  tryNext();
+}
 // 导出当天详情为图片（与 showSvDay 样式完全一致）
 function exportSvDayDetail(date){
   const list=getFilteredSvList().filter(s=>s.date===date).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
@@ -3185,16 +3251,18 @@ function exportSvDayDetail(date){
   wrap.innerHTML=html;
   document.body.appendChild(wrap);
   toast('正在生成图片...');
-  html2canvas(wrap.firstElementChild,{scale:2,backgroundColor:'#ffffff',useCORS:true}).then(canvas=>{
-    wrap.remove();
-    const a=document.createElement('a');
-    a.download=`督学打卡_${date}.png`;
-    a.href=canvas.toDataURL('image/png');
-    a.click();
-    toast('已保存到下载');
-  }).catch(e=>{
-    wrap.remove();
-    toast('导出失败：'+e.message);
+  ensureHtml2Canvas(()=>{
+    html2canvas(wrap.firstElementChild,{scale:2,backgroundColor:'#ffffff',useCORS:true}).then(canvas=>{
+      wrap.remove();
+      const a=document.createElement('a');
+      a.download=`督学打卡_${date}.png`;
+      a.href=canvas.toDataURL('image/png');
+      a.click();
+      toast('已保存到下载');
+    }).catch(e=>{
+      wrap.remove();
+      toast('导出失败：'+e.message);
+    });
   });
 }
 /* ---- 导出报告 ---- */
@@ -3215,8 +3283,8 @@ function openSvExport(){
     </div>
     <div class="form-row" id="sv-exp-custom" style="display:none">
       <div style="display:flex;gap:8px">
-        <div style="flex:1"><label>开始日期</label><input type="date" class="form-control" id="sv-exp-from" value="${today}"></div>
-        <div style="flex:1"><label>结束日期</label><input type="date" class="form-control" id="sv-exp-to" value="${today}"></div>
+        <div style="flex:1"><label>开始日期</label><input type="date" class="form-control" id="sv-exp-from" value="${today}" onchange="updateSvExportPreview()"></div>
+        <div style="flex:1"><label>结束日期</label><input type="date" class="form-control" id="sv-exp-to" value="${today}" onchange="updateSvExportPreview()"></div>
       </div>
     </div>
     <div class="form-row">
@@ -3325,7 +3393,7 @@ function updateSvExportPreview(){
   });
   const students=Object.values(studentMap).map(st=>{
     const stu=DB.data.students[st.sid];
-    return {...st, name:stu&&!stu._deleted?stu.name:'(已删除)', grade:stu&&!stu._deleted?(stu.grade||stu.note||''):'', deleted:stu?stu._deleted:true, last:[...st.days].sort().pop()||''};
+    return {...st, name:stu&&!stu._deleted?stu.name:'(已删除)', grade:stu&&!stu._deleted?(stu.grade||stu.note||''):'', deleted:stu?stu._deleted:true};
   }).sort((a,b)=>b.days.size-a.days.size);
   const totalDays=new Set(list.map(s=>s.date)).size;
   const totalRecords=list.length;
@@ -3388,7 +3456,6 @@ function updateSvExportPreview(){
           <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">👂</th>
           <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">🗣️</th>
           <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">打卡天</th>
-          <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">最近打卡</th>
           <th style="text-align:left;padding:6px 8px;border:1px solid #e5e7eb">科目</th>
         </tr></thead><tbody>`;
       students.forEach((st,i)=>{
@@ -3406,7 +3473,6 @@ function updateSvExportPreview(){
           <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;color:#d97706">${st.listenDays.size>0?st.listenDays.size+'天':'—'}</td>
           <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;color:#dc2626">${st.speakDays.size>0?st.speakDays.size+'天':'—'}</td>
           <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;font-weight:700">${st.ckDays.size}</td>
-          <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;white-space:nowrap">${st.last?(()=>{const gap=Math.round((new Date(todayStr()+'T00:00:00')-new Date(st.last+'T00:00:00'))/86400000);return st.last.slice(5).replace('-','/')+' '+(gap>=14?`<span style="color:#dc2626;font-weight:700">⚠️${gap}天</span>`:(gap>=7?`<span style="color:#d97706">${gap}天</span>`:`<span style="color:#999">${gap}天</span>`));})():'—'}</td>
           <td style="padding:5px 8px;border:1px solid #e5e7eb;color:#666">${subjList}</td>
         </tr>`;
       });
@@ -3600,15 +3666,7 @@ function doSvExport(){
   } else {
     filename = `督学报告_${filterLabel}_${rangeLabel}.png`;
   }
-  if(typeof html2canvas==='undefined'){
-    const script=document.createElement('script');
-    script.src='https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
-    script.onload=()=>{ doSvExportCapture(el,filename); };
-    script.onerror=()=>{ toast('图片生成库加载失败，请直接截图'); };
-    document.head.appendChild(script);
-  } else {
-    doSvExportCapture(el,filename);
-  }
+  ensureHtml2Canvas(()=>{ doSvExportCapture(el,filename); });
 }
 function doSvExportCapture(el,filename){
   // 记录原始滚动位置
@@ -3862,13 +3920,7 @@ function exportSvPersonReport(studentId){
   const el=holder.querySelector('#sv-person-report');
   toast('正在生成个人报告图片...');
   const filename=`督学报告_${stuName}_个人详情_${today}.png`;
-  if(typeof html2canvas==='undefined'){
-    const script=document.createElement('script');
-    script.src='https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
-    script.onload=()=>{ doSvExportCapture(el,filename); };
-    script.onerror=()=>{ toast('图片生成库加载失败'); holder.remove(); };
-    document.head.appendChild(script);
-  } else { doSvExportCapture(el,filename); }
+  ensureHtml2Canvas(()=>{ doSvExportCapture(el,filename); });
   // 兜底清理：doSvExportCapture 完成时会自动清理
   const removeHolder=()=>{ if(holder.parentNode) holder.remove(); };
   setTimeout(removeHolder,15000);
@@ -6192,18 +6244,7 @@ function exportParentReport(studentId){
   if(!el){toast('未找到报告内容');return;}
   toast('正在生成图片...');
   // 使用 html2canvas 如果可用，否则提示用户截图
-  if(typeof html2canvas==='undefined'){
-    // 动态加载 html2canvas
-    const script=document.createElement('script');
-    script.src='https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
-    script.onload=()=>{
-      doExportParentReport(el);
-    };
-    script.onerror=()=>{ toast('图片生成库加载失败，请直接截图'); };
-    document.head.appendChild(script);
-  } else {
-    doExportParentReport(el);
-  }
+  ensureHtml2Canvas(()=>{ doExportParentReport(el); });
 }
 function doExportParentReport(el){
   // 统一走 doSvExportCapture（自动解除父元素 overflow + 动态 scale）
@@ -7659,7 +7700,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v41';
+    const sw=`const C='tw-cache-v42';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
