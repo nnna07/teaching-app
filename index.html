@@ -544,7 +544,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.30.0';
+const APP_VERSION = 'v3.30.1';
 const APP_VERSION_DATE = '2026-08-21';
 
 const $ = s => document.querySelector(s);
@@ -3325,23 +3325,11 @@ function updateSvExportPreview(){
   });
   const students=Object.values(studentMap).map(st=>{
     const stu=DB.data.students[st.sid];
-    return {...st, name:stu&&!stu._deleted?stu.name:'(已删除)', grade:stu&&!stu._deleted?(stu.grade||stu.note||''):'', deleted:stu?stu._deleted:true};
+    return {...st, name:stu&&!stu._deleted?stu.name:'(已删除)', grade:stu&&!stu._deleted?(stu.grade||stu.note||''):'', deleted:stu?stu._deleted:true, last:[...st.days].sort().pop()||''};
   }).sort((a,b)=>b.days.size-a.days.size);
   const totalDays=new Set(list.map(s=>s.date)).size;
   const totalRecords=list.length;
   const totalStudents=students.length;
-  // 按科目统计
-  const subjMap={};
-  list.forEach(s=>{
-    const names=getSubjectCkNames(s);
-    names.forEach(name=>{
-      if(!subjMap[name]) subjMap[name]={name,count:0,days:new Set(),students:new Set(),vocab:0,spell:0};
-      subjMap[name].count++; subjMap[name].days.add(s.date); subjMap[name].students.add(s.studentId);
-      subjMap[name].vocab+=s.vocab||0; subjMap[name].spell+=s.spell||0;
-    });
-  });
-  const subjStats=Object.values(subjMap).sort((a,b)=>b.count-a.count);
-
   let html=`<div id="sv-report-content" style="background:#fff;color:#1a1a1a;padding:16px;border-radius:10px;font-family:system-ui,sans-serif">
     <div style="text-align:center;margin-bottom:14px">
       <div style="font-size:18px;font-weight:700">📍 督学打卡报告</div>
@@ -3366,91 +3354,6 @@ function updateSvExportPreview(){
     html+=card('#fffbeb',allListen,'👂听力(次)','#d97706');
     html+=card('#fef2f2',allSpeak,'🗣️口语(次)','#dc2626');
     html+=`</div>`;
-    // 科目统计表（按打卡类型拆分）
-    if(subjStats.length>0){
-      html+=`<div style="margin-bottom:12px"><div style="font-size:13px;font-weight:600;margin-bottom:6px">📚 科目统计（按打卡类型拆分）</div>`;
-      html+=`<table style="width:100%;border-collapse:collapse;font-size:11px">
-        <thead><tr style="background:#f9fafb">
-          <th style="text-align:left;padding:6px 8px;border:1px solid #e5e7eb">科目</th>
-          <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">次数</th>
-          <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">天数</th>
-          <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">人数</th>
-          <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">单词</th>
-          <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">拼写</th>
-        </tr></thead><tbody>`;
-      subjStats.forEach((st,i)=>{
-        html+=`<tr style="${i%2?'background:#fafbfc':''}">
-          <td style="padding:5px 8px;border:1px solid #e5e7eb;font-weight:600">${st.name}</td>
-          <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;font-weight:700;color:#4f46e5">${st.count}</td>
-          <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb">${st.days.size}</td>
-          <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb">${st.students.size}</td>
-          <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;color:#4f46e5">${st.vocab>0?st.vocab:'—'}</td>
-          <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;color:#059669">${st.spell>0?st.spell:'—'}</td>
-        </tr>`;
-      });
-      html+=`</tbody></table></div>`;
-    }
-    // 每周统计表
-    const weekMap={};
-    list.forEach(s=>{
-      const d=new Date(s.date+'T00:00:00');
-      const dow=d.getDay();
-      const monday=new Date(d); monday.setDate(d.getDate()-(dow===0?6:dow-1));
-      const key=fmtDate(monday);
-      if(!weekMap[key]) weekMap[key]={key,count:0,days:new Set(),vocab:0,spell:0,students:new Set()};
-      weekMap[key].count++; weekMap[key].days.add(s.date); weekMap[key].vocab+=s.vocab||0; weekMap[key].spell+=s.spell||0; weekMap[key].students.add(s.studentId);
-    });
-    const weekStats=Object.values(weekMap).sort((a,b)=>a.key.localeCompare(b.key)).slice(-12);
-    if(weekStats.length>1){
-      html+=`<div style="margin-bottom:12px"><div style="font-size:13px;font-weight:600;margin-bottom:6px">📅 每周统计（近${weekStats.length}周）</div>`;
-      html+=`<table style="width:100%;border-collapse:collapse;font-size:11px">
-        <thead><tr style="background:#f9fafb">
-          <th style="text-align:left;padding:6px 8px;border:1px solid #e5e7eb">周（周一~周日）</th>
-          <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">来访人次</th>
-          <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">活跃天数</th>
-          <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">人数</th>
-          <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">单词</th>
-          <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">拼写</th>
-        </tr></thead><tbody>`;
-      weekStats.forEach((w,i)=>{
-        const end=new Date(w.key+'T00:00:00'); end.setDate(end.getDate()+6);
-        html+=`<tr style="${i%2?'background:#fafbfc':''}">
-          <td style="padding:5px 8px;border:1px solid #e5e7eb">${w.key.slice(5).replace('-','/')} ~ ${fmtDate(end).slice(5).replace('-','/')}</td>
-          <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;font-weight:700;color:#4f46e5">${w.count}</td>
-          <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb">${w.days.size}</td>
-          <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb">${w.students.size}</td>
-          <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;color:#4f46e5">${w.vocab>0?w.vocab:'—'}</td>
-          <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;color:#059669">${w.spell>0?w.spell:'—'}</td>
-        </tr>`;
-      });
-      html+=`</tbody></table></div>`;
-    }
-    // 每日趋势图（近30天或统计范围内）
-    const tToday=todayStr();
-    let tFrom=from||'', tTo=to||'';
-    if(!tFrom||!tTo){ tTo=tToday; const dd=new Date(tTo+'T00:00:00'); dd.setDate(dd.getDate()-29); tFrom=fmtDate(dd); }
-    let spanDays=Math.round((new Date(tTo+'T00:00:00')-new Date(tFrom+'T00:00:00'))/86400000)+1;
-    if(spanDays>40){ const dd=new Date(tTo+'T00:00:00'); dd.setDate(dd.getDate()-29); tFrom=fmtDate(dd); spanDays=30; }
-    const trendDates=[]; for(let i=0;i<spanDays;i++){ const dd=new Date(tFrom+'T00:00:00'); dd.setDate(dd.getDate()+i); trendDates.push(fmtDate(dd)); }
-    const dayMap={};
-    list.forEach(s=>{ if(s.date>=tFrom&&s.date<=tTo){ if(!dayMap[s.date]) dayMap[s.date]={count:0,vocab:0}; dayMap[s.date].count++; dayMap[s.date].vocab+=s.vocab||0; } });
-    const tDays_=trendDates.filter(d=>dayMap[d]).length;
-    const tVisits=trendDates.reduce((s,d)=>s+(dayMap[d]?dayMap[d].count:0),0);
-    const tVocabSum=trendDates.reduce((s,d)=>s+(dayMap[d]?dayMap[d].vocab:0),0);
-    const maxTrend=Math.max(1,...trendDates.map(d=>dayMap[d]?dayMap[d].vocab:0));
-    html+=`<div style="margin-bottom:12px"><div style="font-size:13px;font-weight:600;margin-bottom:2px">📈 每日趋势（${tFrom.slice(5)}~${tTo.slice(5)}）</div><div style="font-size:9px;color:#999;margin-bottom:6px">${tDays_}天有打卡 · ${tVisits}人次 · 背单词${tVocabSum}个 · 柱高=当日单词数</div>`;
-    html+=`<div style="display:flex;align-items:flex-end;gap:1px;height:52px">`;
-    trendDates.forEach(d=>{
-      const dm=dayMap[d];
-      const v=dm?dm.vocab:0;
-      const h=v>0?Math.max(6,Math.round(v/maxTrend*40)):0;
-      html+=`<div style="flex:1;text-align:center">
-        <div style="font-size:6px;color:#4f46e5;height:8px">${v>0?v:''}</div>
-        <div style="height:${h>0?h:(dm?3:1)}px;background:${v>0?'#4f46e5':(dm?'#d97706':'#e5e7eb')};border-radius:2px 2px 0 0"></div>
-        <div style="font-size:6px;color:#999;margin-top:1px">${d.slice(8)}</div>
-      </div>`;
-    });
-    html+=`</div></div>`;
     // 单词排行榜（Top 10）
     const vocabRank=students.filter(s=>s.vocab>0).sort((a,b)=>b.vocab-a.vocab).slice(0,10);
     if(vocabRank.length>0){
@@ -3468,26 +3371,34 @@ function updateSvExportPreview(){
       });
       html+=`</div>`;
     }
-    // 连续打卡榜（Top 5）
-    const tdy=todayStr();
-    const streakArr=students.map(st=>{
-      const dSet=st.days;
-      let cur=0; let chk=new Date(tdy+'T00:00:00');
-      if(!dSet.has(tdy)) chk.setDate(chk.getDate()-1);
-      while(dSet.has(fmtDate(chk))){ cur++; chk.setDate(chk.getDate()-1); }
-      return {name:st.name,streak:cur,days:st.days.size};
-    }).filter(s=>s.streak>0).sort((a,b)=>b.streak-a.streak).slice(0,5);
-    if(streakArr.length>0){
-      html+=`<div style="margin-bottom:12px"><div style="font-size:13px;font-weight:600;margin-bottom:6px">🔥 连续打卡榜（截至今日）</div>`;
-      streakArr.forEach((s,i)=>{
-        html+=`<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
-          <span style="font-size:11px;min-width:24px;text-align:center">${i+1}</span>
-          <span style="font-size:11px;font-weight:600;flex:1">${s.name}</span>
-          <span style="font-size:10px;color:#999">${s.days}天</span>
-          <span style="font-size:11px;color:#d97706;font-weight:700">🔥 连续 ${s.streak} 天</span>
-        </div>`;
+    // 打卡记录明细（按日期倒序，最近60条）
+    const detailRecords=[...list].sort((a,b)=>((b.date+(b.time||''))+'').localeCompare((a.date+(a.time||''))+'')).slice(0,60);
+    if(detailRecords.length>0){
+      const nameOf=sid=>{const stu=DB.data.students[sid];return stu&&!stu._deleted?stu.name:'(已删除)';};
+      html+=`<div style="margin-bottom:12px"><div style="font-size:13px;font-weight:600;margin-bottom:6px">📋 打卡记录明细（最近${detailRecords.length}条 · 共${list.length}条）</div>`;
+      html+=`<table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="background:#f9fafb">
+          <th style="text-align:left;padding:5px 6px;border:1px solid #e5e7eb">日期</th>
+          <th style="text-align:left;padding:5px 4px;border:1px solid #e5e7eb">学生</th>
+          <th style="text-align:left;padding:5px 4px;border:1px solid #e5e7eb">科目</th>
+          <th style="text-align:left;padding:5px 4px;border:1px solid #e5e7eb">打卡内容</th>
+        </tr></thead><tbody>`;
+      detailRecords.forEach((s,i)=>{
+        const chips=[];
+        if((s.vocab||0)>0) chips.push(`<span style="color:#4f46e5;font-weight:600">🔤${s.vocab}</span>`);
+        if((s.spell||0)>0) chips.push(`<span style="color:#059669;font-weight:600">✍️${s.spell}</span>`);
+        if(s.listening) chips.push(`<span style="color:#d97706">👂听力</span>`);
+        if(s.speaking) chips.push(`<span style="color:#dc2626">🗣️口语</span>`);
+        if(chips.length===0) chips.push(`<span style="color:#bbb">来访</span>`);
+        const wd=['日','一','二','三','四','五','六'][new Date(s.date+'T00:00:00').getDay()];
+        html+=`<tr style="${i%2?'background:#fafbfc':''}">
+          <td style="padding:4px 6px;border:1px solid #e5e7eb;white-space:nowrap">${s.date.slice(5)} <span style="color:#999">周${wd}</span>${s.time?` <span style="color:#bbb">${s.time}</span>`:''}</td>
+          <td style="padding:4px 4px;border:1px solid #e5e7eb;font-weight:600;white-space:nowrap">${nameOf(s.studentId)}</td>
+          <td style="padding:4px 4px;border:1px solid #e5e7eb;white-space:nowrap;color:${subjectColor(s.subject||'未分类')}">${s.subject||'未分类'}</td>
+          <td style="padding:4px 4px;border:1px solid #e5e7eb;white-space:nowrap">${chips.join(' ')}</td>
+        </tr>`;
       });
-      html+=`</div>`;
+      html+=`</tbody></table></div>`;
     }
   }
   // 个人明细（含学习打卡汇总数据）
@@ -3506,6 +3417,7 @@ function updateSvExportPreview(){
           <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">👂</th>
           <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">🗣️</th>
           <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">打卡天</th>
+          <th style="text-align:center;padding:6px 6px;border:1px solid #e5e7eb">最近打卡</th>
           <th style="text-align:left;padding:6px 8px;border:1px solid #e5e7eb">科目</th>
         </tr></thead><tbody>`;
       students.forEach((st,i)=>{
@@ -3523,6 +3435,7 @@ function updateSvExportPreview(){
           <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;color:#d97706">${st.listenDays.size>0?st.listenDays.size+'天':'—'}</td>
           <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;color:#dc2626">${st.speakDays.size>0?st.speakDays.size+'天':'—'}</td>
           <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;font-weight:700">${st.ckDays.size}</td>
+          <td style="text-align:center;padding:5px 6px;border:1px solid #e5e7eb;white-space:nowrap">${st.last?(()=>{const gap=Math.round((new Date(todayStr()+'T00:00:00')-new Date(st.last+'T00:00:00'))/86400000);return st.last.slice(5).replace('-','/')+' '+(gap>=14?`<span style="color:#dc2626;font-weight:700">⚠️${gap}天</span>`:(gap>=7?`<span style="color:#d97706">${gap}天</span>`:`<span style="color:#999">${gap}天</span>`));})():'—'}</td>
           <td style="padding:5px 8px;border:1px solid #e5e7eb;color:#666">${subjList}</td>
         </tr>`;
       });
@@ -7775,7 +7688,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v39';
+    const sw=`const C='tw-cache-v40';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
