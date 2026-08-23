@@ -544,8 +544,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.30.3';
-const APP_VERSION_DATE = '2026-08-22';
+const APP_VERSION = 'v3.30.4';
+const APP_VERSION_DATE = '2026-08-23';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -3188,23 +3188,44 @@ function ensureHtml2Canvas(cb){
   if(typeof html2canvas!=='undefined'){ cb(); return; }
   if(window._h2cQueue){ window._h2cQueue.push(cb); return; }
   window._h2cQueue=[cb];
+  // 国内CDN优先（BootCDN/Staticfile），国外兜底
   const urls=[
+    'https://cdn.bootcdn.net/ajax/libs/html2canvas/1.4.1/html2canvas.min.js',
+    'https://cdn.staticfile.org/html2canvas/1.4.1/html2canvas.min.js',
     'https://registry.npmmirror.com/html2canvas/1.4.1/files/dist/html2canvas.min.js',
     'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js',
     'https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js'
   ];
   let i=0;
+  let curScript=null, curTimer=null;
   const tryNext=()=>{
+    if(curScript){ curScript.remove(); curScript=null; }
+    if(curTimer){ clearTimeout(curTimer); curTimer=null; }
     if(i>=urls.length){
-      const q=window._h2cQueue||[]; window._h2cQueue=null;
-      toast('图片生成库加载失败，请检查网络后重试');
-      q.forEach(f=>{try{f();}catch(e){}});
+      // 全部CDN都失败：不调回调（html2canvas仍undefined会崩），重置队列让用户可重试
+      window._h2cQueue=null;
+      toast('图片库加载失败，请检查网络后重试');
       return;
     }
     const s=document.createElement('script');
     s.src=urls[i++];
-    s.onload=()=>{ const q=window._h2cQueue||[]; window._h2cQueue=null; q.forEach(f=>f()); };
-    s.onerror=()=>{ s.remove(); tryNext(); };
+    curScript=s;
+    // 每个CDN最多等6秒，超时就试下一个
+    curTimer=setTimeout(()=>{ console.warn('CDN timeout:',s.src); s.remove(); if(s===curScript) curScript=null; tryNext(); },6000);
+    s.onload=()=>{
+      if(curTimer){ clearTimeout(curTimer); curTimer=null; }
+      if(typeof html2canvas!=='undefined'){
+        const q=window._h2cQueue||[]; window._h2cQueue=null;
+        q.forEach(f=>{try{f();}catch(e){console.error(e);}});
+      } else {
+        // 脚本加载了但html2canvas未定义（可能是错误页面），试下一个
+        s.remove(); if(s===curScript) curScript=null; tryNext();
+      }
+    };
+    s.onerror=()=>{
+      if(curTimer){ clearTimeout(curTimer); curTimer=null; }
+      s.remove(); if(s===curScript) curScript=null; tryNext();
+    };
     document.head.appendChild(s);
   };
   tryNext();
@@ -7700,7 +7721,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v42';
+    const sw=`const C='tw-cache-v43';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
