@@ -507,6 +507,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
       <button class="btn btn-primary btn-block" onclick="openExport()" style="margin-bottom:6px">Excel 多维度导出</button>
       <button class="btn btn-ghost btn-block" onclick="exportFile()" style="margin-bottom:6px">导出 JSON 全量备份</button>
       <button class="btn btn-ghost btn-block" onclick="seedDemo()" style="margin-bottom:6px">📝 载入示例数据（新手体验）</button>
+      <button class="btn btn-ghost btn-block" onclick="openTrash()" style="margin-bottom:6px">🗑️ 回收站（恢复误删）</button>
       <button class="btn btn-danger btn-block" onclick="resetData()">🗑️ 清空所有数据</button>
     </div>
     <div class="card">
@@ -523,10 +524,10 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
       <b style="color:var(--text2)">使用说明</b><br>
       1. 📚教学台：课次/时间表/课程三合一，支持1对1/1对2/班课/小组课/体验课/陪练课等；新建课次自动推荐空档时段，保存时自动检测老师/学生时间冲突（可忽略），周视图冲突红框警示<br>
       2. 📍督学打卡：记录来访+学习打卡（填数字自动记录），学生按最近来访排序、自动带出常用科目，个人/月历视图，支持导出<br>
-      3. 🏫托班：批量到班/一键批量离班，各科作业完成情况（✓完成/◐部分/✗未做），个人月历+个人报告图片导出<br>
+      3. 🏫托班：批量到班/一键批量离班，各科作业完成情况（✓完成/◐部分/✗未做），到班可联动督学来访，个人月历+个人报告图片导出<br>
       4. 📝记录：日/周/月/年四视图，番茄TODO风格可视化<br>
       5. 👤我的：老师管理/云端同步/设置<br>
-      6. 💾自动同步：腾讯云COS云端同步（国内直连），跨设备/跨浏览器自动同步数据<br>
+      6. 💾自动同步+备份：腾讯云COS云端同步（国内直连）；每天自动备份一份（保留最近7份，可在"我的"页恢复）；删除的学生/课次/老师可在回收站恢复<br>
       7. 手机浏览器菜单"添加到主屏幕"可像App使用，更新后自动刷新
     </div>
   </div>
@@ -576,8 +577,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.34.0';
-const APP_VERSION_DATE = '2026-09-01';
+const APP_VERSION = 'v3.35.0';
+const APP_VERSION_DATE = '2026-09-02';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -716,6 +717,7 @@ const DB = {
     if(!this.data.supervisions) this.data.supervisions = {};
     if(!this.data.checkins) this.data.checkins = {};
     if(!this.data.daycare) this.data.daycare = {};
+    if(!this.data.trash) this.data.trash = {};
     Object.values(this.data.supervisions).forEach(sv=>{ if(!sv.subject) sv.subject=''; });
     Object.values(this.data.students).forEach(s=>{
       if(!s.lessonTotals) s.lessonTotals = {};
@@ -732,7 +734,7 @@ const DB = {
   saveConfig(){ localStorage.setItem(this.CONFIG_KEY, JSON.stringify(this.config)); },
   _seed(){
     return { _updatedAt:now(), _version:0, currentTeacherId:null,
-      teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, checkins:{}, daycare:{}, settings:{} };
+      teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, checkins:{}, daycare:{}, trash:{}, settings:{} };
   },
   merge(incoming){
     // 兼容处理：如果 incoming 被嵌套包裹在 data 字段中，递归解包
@@ -745,7 +747,7 @@ const DB = {
     }
     incoming = data;
     let changes=0;
-    for(const table of ['teachers','students','lessons','sessions','supervisions','checkins','daycare','settings']){
+    for(const table of ['teachers','students','lessons','sessions','supervisions','checkins','daycare','trash','settings']){
       for(const id in (incoming[table]||{})){
         const inc=incoming[table][id], loc=this.data[table]?this.data[table][id]:null;
         if(!loc || (inc.updatedAt||0)>(loc.updatedAt||0)){
@@ -833,7 +835,7 @@ async function sha1Hex(msgStr){
 }
 
 // 生成 COS v1 签名 Authorization header
-async function cosAuth(method){
+async function cosAuth(method, key=COS_SYNC_KEY){
   const secretId = DB.config.cosSecretId;
   const secretKey = DB.config.cosSecretKey;
   const now = Math.floor(Date.now()/1000);
@@ -843,7 +845,7 @@ async function cosAuth(method){
   const signKey = await hmacSha1Hex(secretKey, keyTime);
   // FormatString = HttpMethod\nUriPath\nHttpParameters\nHttpHeaders\n
   const httpMethod = method.toLowerCase();
-  const uriPath = '/' + COS_SYNC_KEY;
+  const uriPath = '/' + key;
   const formatString = `${httpMethod}\n${uriPath}\n\n\n`;
   // StringToSign = sha1\nKeyTime\nSHA1(FormatString)\n
   const sha1Format = await sha1Hex(formatString);
@@ -854,9 +856,9 @@ async function cosAuth(method){
 }
 
 // 从 COS 读取同步数据（不存在返回 null）
-async function cosRead(){
+async function cosRead(key=COS_SYNC_KEY){
   const auth = await cosAuth('GET');
-  const resp = await fetchWithTimeout(`https://${cosHost()}/${COS_SYNC_KEY}`, {
+  const resp = await fetchWithTimeout(`https://${cosHost()}/${key}`, {
     method:'GET', headers:{ 'Authorization': auth }
   }, 30000);
   if(resp.status === 404) return null;
@@ -865,9 +867,9 @@ async function cosRead(){
 }
 
 // 写入同步数据到 COS
-async function cosWrite(text){
+async function cosWrite(text, key=COS_SYNC_KEY){
   const auth = await cosAuth('PUT');
-  const resp = await fetchWithTimeout(`https://${cosHost()}/${COS_SYNC_KEY}`, {
+  const resp = await fetchWithTimeout(`https://${cosHost()}/${key}`, {
     method:'PUT',
     headers:{ 'Authorization': auth, 'Content-Type': 'application/json' },
     body: text
@@ -954,6 +956,57 @@ async function resetCloudSync(){
   }
 }
 
+/* ==================== 每日自动备份（按星期覆盖，保留最近7份） ==================== */
+async function cosBackupNow(manual=false){
+  if(!isCosConfigured()){ if(manual) toast('请先配置腾讯云COS'); return; }
+  if(syncing){ if(manual) toast('⏳ 正在同步中，请稍后再试'); return; }
+  const dow=new Date().getDay();
+  const key=`teach-backup-${dow}.json`;
+  try{
+    if(manual) toast('💾 正在备份...');
+    await cosWrite(JSON.stringify(DB.export()), key);
+    DB.config.lastBackupDay=todayStr(); DB.config.lastBackupAt=now(); DB.saveConfig();
+    if(manual){ toast('✅ 备份成功（'+todayStr()+'）'); renderMine(); }
+  }catch(e){ if(manual) toast('❌ 备份失败: '+e.message); }
+}
+function maybeAutoBackup(){
+  try{
+    if(!isCosConfigured() || !DB.config.autoSync) return;
+    if(DB.config.lastBackupDay===todayStr()) return;
+    cosBackupNow(false);
+  }catch(e){}
+}
+function openBackupRestore(){
+  const wd=new Date().getDay()===0?-6:1-new Date().getDay();
+  const monday=new Date(); monday.setDate(monday.getDate()+wd);
+  let html=`<div style="font-size:11px;color:var(--text3);line-height:1.7;margin-bottom:10px">每天自动备份一份到云端（按星期覆盖，保留最近7份）。<b style="color:var(--red)">恢复会用所选备份完全替换当前设备数据</b>，如当前有未同步的新数据请先同步。</div>`;
+  for(let i=0;i<7;i++){
+    const d=new Date(monday); d.setDate(monday.getDate()+i);
+    html+=`<button class="btn btn-ghost btn-block" style="margin-bottom:6px;font-size:12px" onclick="restoreFromBackup('teach-backup-${i}.json',${i})">📥 ${dayNames[i]}备份（${fmtDate(d)}）</button>`;
+  }
+  openModal(html,`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button>`); setSheetTitle('💾 从备份恢复');
+}
+async function restoreFromBackup(key,dow){
+  if(!isCosConfigured()){ toast('请先配置腾讯云COS'); return; }
+  const wd=new Date().getDay()===0?-6:1-new Date().getDay();
+  const monday=new Date(); monday.setDate(monday.getDate()+wd);
+  const bd=new Date(monday); bd.setDate(monday.getDate()+(dow===0?6:dow-1));
+  if(!confirm(`确定用 ${dayNames[dow]}（${fmtDate(bd)}）的备份恢复吗？\n\n当前设备的所有数据将被备份中的数据完全替换！`)) return;
+  toast('📥 正在读取备份...');
+  try{
+    const text=await cosRead(key);
+    if(!text){ toast('该天没有备份'); return; }
+    let data=JSON.parse(text);
+    data=unwrapSyncData(data);
+    DB.data={ _updatedAt:now(), _version:0, currentTeacherId:null, teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, checkins:{}, daycare:{}, trash:{}, settings:{} };
+    for(const table of ['teachers','students','lessons','sessions','supervisions','checkins','daycare','trash','settings']){
+      if(data[table]) for(const id in data[table]){ if(!data[table][id]._deleted) DB.data[table][id]=data[table][id]; }
+    }
+    DB.save(); closeModal(); refreshCurrentView();
+    toast('✅ 已从备份恢复');
+  }catch(e){ toast('❌ 恢复失败: '+e.message); }
+}
+
 // 检查 COS 连接（诊断用）
 async function checkCos(){
   if(!isCosConfigured()){ toast('请先填写腾讯云COS配置'); return; }
@@ -988,8 +1041,8 @@ async function pullCloudOnly(){
       let syncData = JSON.parse(cloudText);
       syncData = unwrapSyncData(syncData);
       DB.data = { _updatedAt:now(), _version:0, currentTeacherId:null,
-        teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, checkins:{}, daycare:{}, settings:{} };
-      for(const table of ['teachers','students','lessons','sessions','supervisions','checkins','daycare','settings']){
+        teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, checkins:{}, daycare:{}, trash:{}, settings:{} };
+      for(const table of ['teachers','students','lessons','sessions','supervisions','checkins','daycare','trash','settings']){
         if(syncData[table]){
           for(const id in syncData[table]){
             if(!syncData[table][id]._deleted){
@@ -1029,6 +1082,7 @@ function setSyncInd(on){
 
 setInterval(()=>{ if(DB.config && isCosConfigured() && DB.config.autoSync && !syncing) doCloudSync(false); }, 30000);
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden && DB.config && isCosConfigured()) doCloudSync(false); });
+setTimeout(maybeAutoBackup, 12000); // 每天首次打开12秒后自动备份
 
 /* ==================== 跨标签页自动同步 (零配置) ==================== */
 let syncBC = null;
@@ -4301,6 +4355,12 @@ function saveLesson(id){
   }
   DB.save(); closeModal(); refreshCurrentView(); toast('已保存');
 }
+function lessonTrashSnap(ids){
+  const snap={lessons:{},sessions:{}};
+  ids.forEach(lid=>{ const l=DB.data.lessons[lid]; if(l && !l._deleted) snap.lessons[lid]=JSON.parse(JSON.stringify(l)); });
+  Object.values(DB.data.sessions).forEach(ss=>{ if(!ss._deleted && ids.includes(ss.lessonId)) snap.sessions[ss.id]=JSON.parse(JSON.stringify(ss)); });
+  return snap;
+}
 function delLesson(id, silent){
   const l=DB.data.lessons[id]; if(!l) return;
   const t=now();
@@ -4308,6 +4368,8 @@ function delLesson(id, silent){
     const batchCount=Object.values(DB.data.lessons).filter(x=>!x._deleted && x.batchId===l.batchId).length;
     const choice=confirm(`该课次属于批量创建(共${batchCount}节)。\n点「确定」删除整批,点「取消」只删除这一节。`);
     if(choice){
+      const batchIds=Object.values(DB.data.lessons).filter(x=>!x._deleted && x.batchId===l.batchId).map(x=>x.id);
+      trashAdd('lesson',`课次 ${l.title||''}（整批${batchIds.length}节）`,lessonTrashSnap(batchIds));
       Object.values(DB.data.lessons).forEach(x=>{
         if(!x._deleted && x.batchId===l.batchId){
           x._deleted=true; x.updatedAt=t;
@@ -4318,7 +4380,8 @@ function delLesson(id, silent){
       DB.save(); refreshCurrentView(); renderRecords(); toast(`已删除整批 ${batchCount} 节`); return;
     }
   }
-  if(!silent && !confirm('删除该课次?')) return;
+  if(!silent && !confirm('删除该课次?\n(删除后可在 我的→回收站 恢复)')) return;
+  trashAdd('lesson',`课次 ${l.title||''} ${l.date||l.hhmm||''}`.trim(),lessonTrashSnap([id]));
   DB.softDelete('lessons',id);
   // 同步删除关联session
   Object.values(DB.data.sessions).forEach(s=>{ if(!s._deleted && s.lessonId===id){ s._deleted=true; s.updatedAt=t; } });
@@ -4326,6 +4389,7 @@ function delLesson(id, silent){
 }
 function delLessonsBatch(ids){
   const t=now();
+  if(ids.length) trashAdd('lesson',`课次批量删除(${ids.length}节)`,lessonTrashSnap(ids));
   ids.forEach(id=>{
     DB.softDelete('lessons',id);
     Object.values(DB.data.sessions).forEach(s=>{ if(!s._deleted && s.lessonId===id){ s._deleted=true; s.updatedAt=t; } });
@@ -6166,6 +6230,7 @@ function openStudentView(studentId){
     ${sectionHtml('single', '单次课次', singles.length, singleHtml)}
     <div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap">
       <button class="btn btn-primary" style="flex:1" onclick="closeModal();openParentReport('${s.id}')">📊 家长报告</button>
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal();openParentWeekly('${s.id}')">📋 本周周报</button>
       <button class="btn btn-ghost" style="flex:1" onclick="closeModal();openStudentEdit('${s.id}')">编辑</button>
       <button class="btn btn-danger" style="flex:1" onclick="closeModal();delStudent('${s.id}')">删除</button>
       <button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button>
@@ -6267,6 +6332,99 @@ function doExportParentReport(el){
   const stuName=DB.data.students[$('#sheet').dataset.studentId]?.name||'';
   const filename=`家长报告_${stuName}_${todayStr()}.png`;
   doSvExportCapture(el,filename);
+}
+
+/* ==================== 家长周报（本周上课+打卡+托班） ==================== */
+function openParentWeekly(studentId){
+  const s=DB.data.students[studentId]; if(!s||s._deleted) return;
+  const wk=getWeekDates(0);
+  const weekSet=new Set(wk.dates.map(x=>x.date));
+  const inWeek=d=>weekSet.has(d);
+  // 本周上课
+  const sessions=Object.values(DB.data.sessions).filter(ss=>!ss._deleted && ss.studentIds.includes(studentId) && inWeek(ss.date||'') && ss.status!=='planned').sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const doneSs=sessions.filter(ss=>ss.status==='done');
+  const totalMin=doneSs.reduce((sum,ss)=>sum+((ss.actualEnd||0)-(ss.actualStart||0)),0)/60000;
+  // 本周督学打卡
+  const svs=Object.values(DB.data.supervisions).filter(r=>!r._deleted && r.studentId===studentId && inWeek(r.date||'')).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const vocab=svs.reduce((a,r)=>a+(r.vocab||0),0), spell=svs.reduce((a,r)=>a+(r.spell||0),0);
+  // 本周托班
+  const dcs=Object.values(DB.data.daycare).filter(r=>!r._deleted && r.studentId===studentId && inWeek(r.date||'')).sort((a,b)=>a.date.localeCompare(b.date));
+  const dcMin=dcs.map(dcDuration).filter(Boolean).reduce((a,b)=>a+b,0);
+
+  let html=`<div class="parent-report" id="parent-weekly-content">
+    <div class="pr-header">
+      <div class="pr-name">${s.name}</div>
+      <div class="pr-info">${s.grade||''} · 本周周报</div>
+      <div class="pr-info" style="margin-top:2px">${wk.monthLabel}</div>
+    </div>
+    <div class="pr-stat-row">
+      <div class="pr-stat"><div class="num" style="color:#4f46e5">${doneSs.length}</div><div class="lbl">本周上课</div></div>
+      <div class="pr-stat"><div class="num" style="color:#059669">${Math.round(totalMin)}</div><div class="lbl">上课分钟</div></div>
+      <div class="pr-stat"><div class="num" style="color:#d97706">${svs.length}</div><div class="lbl">督学打卡</div></div>
+      <div class="pr-stat"><div class="num" style="color:#7c3aed">${dcs.length}</div><div class="lbl">托班天数</div></div>
+    </div>`;
+
+  // 上课记录
+  if(sessions.length){
+    html+=`<div class="pr-section-title">📚 本周上课 (${sessions.length}节)</div>
+    <table class="pr-table"><thead><tr><th>日期</th><th>科目</th><th>老师</th><th>时长</th><th>状态</th></tr></thead><tbody>
+    ${sessions.map(ss=>{ const l=DB.data.lessons[ss.lessonId]; const dur=ss.actualStart&&ss.actualEnd?Math.round((ss.actualEnd-ss.actualStart)/60000)+'分':(l?l.duration+'分':'-');
+      let stTxt='',stColor='';
+      if(ss.status==='done'){stTxt='✓ 已上';stColor='color:#059669;font-weight:600';}
+      else if(ss.status==='absent'){stTxt='✗ 缺勤';stColor='color:#dc2626;font-weight:600';}
+      else{stTxt='请假';stColor='color:#d97706';}
+      return `<tr><td>${ss.date.slice(5)} 周${dayNames[dayOfWeek(ss.date)][1]}</td><td class="left">${l?l.title:'-'}</td><td>${l?lessonTeacherDisplay(l,{short:true}):(DB.data.teachers[ss.teacherId]?DB.data.teachers[ss.teacherId].name:'-')}</td><td>${dur}</td><td style="${stColor}">${stTxt}</td></tr>`; }).join('')}
+    </tbody></table>`;
+  } else {
+    html+=`<div class="pr-section-title">📚 本周上课</div><div style="text-align:center;color:#9ca3af;font-size:12px;padding:10px">本周暂无上课记录</div>`;
+  }
+
+  // 督学打卡
+  if(svs.length){
+    html+=`<div class="pr-section-title">📍 督学打卡 (${svs.length}次${vocab||spell?` · 🔤${vocab} ✍️${spell}`:''})</div>`;
+    svs.forEach(r=>{
+      const chips=[];
+      if((r.vocab||0)>0) chips.push('🔤'+r.vocab);
+      if((r.spell||0)>0) chips.push('✍️'+r.spell);
+      if(r.listening) chips.push('👂听力');
+      if(r.speaking) chips.push('🗣️口语');
+      html+=`<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px dashed #e5e7eb;font-size:12px">
+        <span style="font-weight:600">${r.date.slice(5)} 周${dayNames[dayOfWeek(r.date)][1]}</span>
+        <span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:${subjectColor(r.subject)}18;color:${subjectColor(r.subject)}">${r.subject||'未分类'}</span>
+        <span style="margin-left:auto;color:#374151">${chips.length?chips.join(' '):'✓ 来访'}</span>
+      </div>`;
+    });
+  }
+
+  // 托班
+  if(dcs.length){
+    html+=`<div class="pr-section-title">🏫 托班 (${dcs.length}天${dcMin?` · 共${fmtDcDur(dcMin)}`:''})</div>`;
+    dcs.forEach(r=>{
+      const dur=dcDuration(r);
+      const chips=hwChips(r);
+      html+=`<div style="padding:5px 0;border-bottom:1px dashed #e5e7eb;font-size:12px">
+        <div style="display:flex;align-items:center;gap:6px"><span style="font-weight:600">${r.date.slice(5)} 周${dayNames[dayOfWeek(r.date)][1]}</span><span style="margin-left:auto;color:#6b7280;font-size:11px">${r.arrive||'--:--'}~${r.leave||'--:--'}${dur?' · '+fmtDcDur(dur):''}</span></div>
+        ${chips?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${chips}</div>`:''}
+        ${r.note?`<div style="font-size:10px;color:#9ca3af;margin-top:3px">📝 ${r.note}</div>`:''}
+      </div>`;
+    });
+  }
+
+  if(!sessions.length && !svs.length && !dcs.length){
+    html+=`<div style="text-align:center;color:#9ca3af;font-size:12px;padding:16px">本周暂无任何记录</div>`;
+  }
+
+  html+=`<div class="pr-footer">教学管理工作台 · ${todayStr()} 生成</div></div>`;
+  const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button><button class="btn btn-primary" style="flex:2" onclick="exportParentWeekly()">💾 保存为图片</button>`;
+  openModal(html,footer); setSheetTitle('📋 本周周报');
+  $('#sheet').dataset.studentId = studentId;
+}
+function exportParentWeekly(){
+  const el=$('#parent-weekly-content');
+  if(!el){ toast('未找到周报内容'); return; }
+  const stuName=DB.data.students[$('#sheet').dataset.studentId]?.name||'';
+  toast('正在生成图片...');
+  ensureHtml2Canvas(()=>{ doSvExportCapture(el,`家长周报_${stuName}_${todayStr()}.png`); });
 }
 
 /* ==================== 上课记录 - 番茄TODO风格 ==================== */
@@ -6530,12 +6688,32 @@ function renderDcPerson(studentId){
   if(rs.length>30) html+=`<div style="text-align:center;font-size:11px;color:var(--text3);padding:8px">仅显示最近30天记录</div>`;
   $('#daycare-content').innerHTML=html;
 }
+function svSubjectFor(sid){
+  const freq={};
+  Object.values(DB.data.supervisions).filter(r=>!r._deleted&&r.studentId===sid).forEach(r=>{ const k=r.subject||''; if(k) freq[k]=(freq[k]||0)+1; });
+  const top=Object.entries(freq).sort((a,b)=>b[1]-a[1])[0];
+  if(top) return top[0];
+  const g={};
+  Object.values(DB.data.supervisions).filter(r=>!r._deleted).forEach(r=>{ const k=r.subject||''; if(k) g[k]=(g[k]||0)+1; });
+  const gt=Object.entries(g).sort((a,b)=>b[1]-a[1])[0];
+  return gt?gt[0]:'';
+}
+function dcLinkSv(sid,date,time){
+  const subj=svSubjectFor(sid);
+  if(!subj) return false;
+  const dup=Object.values(DB.data.supervisions).some(r=>!r._deleted&&r.studentId===sid&&r.date===date&&r.subject===subj);
+  if(dup) return false;
+  const t=now(); const id=uid();
+  DB.data.supervisions[id]={id,studentId:sid,subject:subj,date,time:time||'',note:'托班到班联动',vocab:0,spell:0,listening:false,speaking:false,createdAt:t,updatedAt:t};
+  return true;
+}
 function openDcQuick(){
   const students=Object.values(DB.data.students).filter(s=>!s._deleted);
   if(!students.length){ toast('请先在「我的」页面添加学生'); return; }
   const groups={};
   students.forEach(s=>{ const g=gradeGroup(s.grade); if(!groups[g]) groups[g]=[]; groups[g].push(s); });
   let html=`<div class="form-row"><label>日期</label><input type="date" class="form-control" id="dcq-date" value="${dcDate}"></div>`;
+  html+=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);margin:6px 0 2px"><input type="checkbox" id="dcq-sv" checked style="width:auto">📍 同时记录督学来访（各学生常用科目）</label>`;
   DC_GROUPS.forEach(g=>{
     if(!groups[g]||!groups[g].length) return;
     html+=`<div style="font-size:12px;font-weight:600;color:var(--text2);margin:8px 0 4px">${g}（${groups[g].length}人）</div>
@@ -6548,15 +6726,18 @@ function saveDcQuick(){
   const date=$('#dcq-date').value||dcDate;
   const ids=[...document.querySelectorAll('.dcq-stu:checked')].map(cb=>cb.value);
   if(!ids.length){ toast('请至少选择一个学生'); return; }
+  const linkSv=$('#dcq-sv')?$('#dcq-sv').checked:true;
   const t=now(); const time=new Date().toTimeString().slice(0,5); const changed=[];
+  let svCount=0;
   ids.forEach(sid=>{
     if(findDaycareRecord(sid,date)) return;
     const id=uid();
     DB.data.daycare[id]={id,studentId:sid,date,arrive:time,leave:'',homework:[],note:'',createdAt:t,updatedAt:t};
     changed.push(sid);
+    if(linkSv && dcLinkSv(sid,date,time)) svCount++;
   });
   if(!changed.length){ toast('所选学生当天已有记录'); return; }
-  DB.save(); closeModal(); dcDate=date; renderDaycare(); toast(`✓ 已记录 ${changed.length} 名学生到班（${time}）`);
+  DB.save(); closeModal(); dcDate=date; renderDaycare(); toast(`✓ 已记录 ${changed.length} 名学生到班（${time}）${svCount?`，同步督学来访 ${svCount} 条`:''}`);
 }
 function dcHwRow(subj,h){
   const st=(h&&h.st)||'';
@@ -6613,6 +6794,7 @@ function openDcEdit(studentId,editId){
   <div style="font-size:12px;font-weight:600;color:var(--text2);margin:4px 0">📚 作业完成情况</div>
   <div id="dc-hw-list">${dcHwSubjects(studentId).map(subj=>dcHwRow(subj,hwMap[subj])).join('')}</div>
   <button class="btn btn-sm btn-ghost" style="margin-top:6px" onclick="addDcHwRow()">＋ 添加科目</button>
+  ${!r?`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);margin:6px 0 2px"><input type="checkbox" id="dc-sv" checked style="width:auto">📍 同时记录督学来访${svSubjectFor(studentId)?`（${svSubjectFor(studentId)}）`:''}</label>`:''}
   <div class="form-row" style="margin-top:8px"><label>备注</label><textarea class="form-control" id="dc-note" rows="2" placeholder="今天的表现/特殊情况...">${(r&&r.note)||''}</textarea></div>`;
   const footer=(r?`<button class="btn btn-danger" style="flex:1" onclick="delDaycareRecord('${r.id}')">删除</button>`:'')+
     `<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="saveDaycareRecord(${r?`'${r.id}'`:''},'${studentId}')">✓ 保存</button>`;
@@ -6636,7 +6818,9 @@ function saveDaycareRecord(editId,studentId){
     const id=uid();
     DB.data.daycare[id]={id,studentId,date,arrive,leave,homework,note,createdAt:t,updatedAt:t};
   }
-  DB.save(); closeModal(); dcDate=date; renderDaycare(); toast('✓ 已保存托班记录');
+  const svLinked=(!editId && ($('#dc-sv')?$('#dc-sv').checked:true)) ? dcLinkSv(studentId,date,arrive) : false;
+  DB.save(); closeModal(); dcDate=date; renderDaycare();
+  toast(svLinked?'✓ 已保存托班记录，并同步督学来访':'✓ 已保存托班记录');
 }
 function exportDcPerson(studentId){
   const s=DB.data.students[studentId];
@@ -7283,6 +7467,14 @@ function renderMine(){
       <button class="btn btn-danger btn-block" onclick="resetCloudSync()" style="font-size:11px;margin-bottom:4px">⚠️ 重置云端数据</button>
       <button class="btn btn-primary btn-block" onclick="pullCloudOnly()" style="font-size:11px;margin-bottom:4px">📥 仅拉取云端（覆盖本地，新设备用）</button>
     </div>
+    <div style="border-top:1px solid var(--border);margin:8px 0;padding-top:8px">
+      <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px">💾 每日自动备份（保留最近7份）</div>
+      <div style="font-size:10px;color:var(--text3);margin-bottom:4px">上次备份：${cfg.lastBackupDay?cfg.lastBackupDay+(cfg.lastBackupAt?' '+fmtTime(cfg.lastBackupAt):''):'尚未备份'} · 每天首次打开自动备份</div>
+      <div style="display:flex;gap:4px">
+        <button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="cosBackupNow(true)">💾 立即备份</button>
+        <button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="openBackupRestore()">📥 从备份恢复</button>
+      </div>
+    </div>
     <div style="font-size:10px;color:var(--text3);margin-top:8px;line-height:1.6">
       💡 同步说明：<br>
       • 同一浏览器多标签页 → 自动同步，零配置<br>
@@ -7456,7 +7648,9 @@ function saveTeacher(id){
   DB.save(); closeModal(); renderMine(); toast('已保存');
 }
 function delTeacher(id){
-  if(!confirm('删除该老师?')) return;
+  const tt=DB.data.teachers[id];
+  if(!confirm('删除该老师?\n(删除后可在 我的→回收站 恢复)')) return;
+  if(tt && !tt._deleted) trashAdd('teacher',`老师 ${tt.name||''}`,{teachers:{[id]:JSON.parse(JSON.stringify(tt))}});
   DB.softDelete('teachers',id);
   if(DB.data.currentTeacherId===id) DB.data.currentTeacherId=Object.keys(DB.data.teachers).filter(k=>!DB.data.teachers[k]._deleted)[0]||null;
   DB.save(); renderMine();
@@ -7629,7 +7823,15 @@ function saveStudent(id){
 function delStudent(id){
   const s=DB.data.students[id]; if(!s) return;
   const sName=s.name||'';
-  if(!confirm(`删除学生「${sName}」?\n该学生关联的所有课次也会一并删除!`)) return;
+  if(!confirm(`删除学生「${sName}」?\n该学生关联的所有课次也会一并删除!\n(删除后可在 我的→回收站 恢复)`)) return;
+  // 快照进回收站
+  const snap={students:{},lessons:{},sessions:{},supervisions:{},daycare:{}};
+  snap.students[id]=JSON.parse(JSON.stringify(s));
+  Object.values(DB.data.lessons).forEach(l=>{ if(!l._deleted && l.studentIds.includes(id)) snap.lessons[l.id]=JSON.parse(JSON.stringify(l)); });
+  Object.values(DB.data.sessions).forEach(ss=>{ if(!ss._deleted && ss.studentIds && ss.studentIds.includes(id)) snap.sessions[ss.id]=JSON.parse(JSON.stringify(ss)); });
+  Object.values(DB.data.supervisions).forEach(sv=>{ if(!sv._deleted && sv.studentId===id) snap.supervisions[sv.id]=JSON.parse(JSON.stringify(sv)); });
+  Object.values(DB.data.daycare).forEach(dc=>{ if(!dc._deleted && dc.studentId===id) snap.daycare[dc.id]=JSON.parse(JSON.stringify(dc)); });
+  trashAdd('student',`学生 ${sName}`,snap);
   DB.softDelete('students',id);
   // 删除只有该学生的课次，其他课次移除该学生
   Object.values(DB.data.lessons).forEach(l=>{
@@ -7665,6 +7867,62 @@ function delStudent(id){
     if(!dc._deleted && dc.studentId===id){ dc._deleted=true; dc.updatedAt=now(); }
   });
   DB.save(); renderMine(); toast(`已删除学生「${sName}」及关联课程`);
+}
+
+/* ==================== 回收站（删除可恢复） ==================== */
+function trashAdd(type,label,snap){
+  if(!DB.data.trash) DB.data.trash={};
+  const id=uid();
+  DB.data.trash[id]={id,type,label,time:now(),snapshot:snap};
+  // 最多保留50条，超出删最旧
+  const entries=Object.values(DB.data.trash).sort((a,b)=>b.time-a.time);
+  entries.slice(50).forEach(e=>{ delete DB.data.trash[e.id]; });
+  return id;
+}
+function trashTypeLabel(t){ return t==='student'?'学生':(t==='lesson'?'课次':(t==='teacher'?'老师':'记录')); }
+function openTrash(){
+  const entries=Object.values(DB.data.trash||{}).sort((a,b)=>b.time-a.time);
+  const html=entries.length? entries.map(e=>{
+    const d=new Date(e.time);
+    const dt=`${d.getMonth()+1}月${d.getDate()}日 ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.label}</div>
+      <div style="font-size:10px;color:var(--text3)">${trashTypeLabel(e.type)} · ${dt}</div></div>
+      <button class="btn btn-sm btn-primary" onclick="restoreTrash('${e.id}')">恢复</button>
+      <button class="btn btn-sm btn-danger" onclick="delTrashEntry('${e.id}')">删</button>
+    </div>`;
+  }).join('') : '<div style="text-align:center;color:var(--text3);font-size:12px;padding:24px">回收站是空的</div>';
+  const footer=entries.length
+    ? `<button class="btn btn-danger" style="flex:1" onclick="clearTrash()">清空回收站</button><button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button>`
+    : `<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button>`;
+  openModal(`<div>${html}</div>`,footer); setSheetTitle('🗑️ 回收站');
+}
+function delTrashEntry(id){
+  if(!confirm('彻底删除这条回收站记录？不可恢复')) return;
+  if(DB.data.trash && DB.data.trash[id]){ delete DB.data.trash[id]; DB.save(); openTrash(); }
+}
+function clearTrash(){
+  if(!confirm('清空回收站？所有条目将不可恢复')) return;
+  DB.data.trash={}; DB.save(); closeModal(); toast('回收站已清空');
+}
+function restoreTrash(id){
+  const e=DB.data.trash && DB.data.trash[id]; if(!e) return;
+  const t=now(); let restored=0;
+  const sid=e.type==='student'? Object.keys(e.snapshot.students||{})[0] : null;
+  for(const table in e.snapshot){
+    if(!DB.data[table]) DB.data[table]={};
+    for(const rid in e.snapshot[table]){
+      const rec=JSON.parse(JSON.stringify(e.snapshot[table][rid]));
+      const cur=DB.data[table][rid];
+      if(!cur || cur._deleted){ rec._deleted=false; rec.updatedAt=t; DB.data[table][rid]=rec; restored++; }
+      else if(sid && Array.isArray(rec.studentIds) && Array.isArray(cur.studentIds) && !cur.studentIds.includes(sid)){
+        cur.studentIds.push(sid); cur.updatedAt=t;
+      }
+    }
+  }
+  delete DB.data.trash[id];
+  DB.save(); closeModal(); refreshCurrentView(); renderMine();
+  toast(`✅ 已恢复 ${restored} 条记录`);
 }
 
 // 合并重复学生 - 预览
@@ -8174,7 +8432,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v49';
+    const sw=`const C='tw-cache-v50';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
