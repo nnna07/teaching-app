@@ -369,6 +369,12 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
   </div>
 
   <div class="view" id="view-lessons">
+    <div class="view-switch" id="ls-sub-switch" style="margin-bottom:8px">
+      <button class="active" data-lss="lessons" onclick="setLsSub('lessons')">📋 课次</button>
+      <button data-lss="timetable" onclick="setLsSub('timetable')">📅 时间表</button>
+      <button data-lss="courses" onclick="setLsSub('courses')">📖 课程</button>
+    </div>
+    <div id="ls-sub-lessons">
     <div class="filter-bar" id="lessons-teacher-filter"></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <span style="font-size:13px;font-weight:600">全部课次 (<span id="lesson-count">0</span>)</span>
@@ -378,9 +384,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
       </div>
     </div>
     <div id="lessons-list"></div>
-  </div>
-
-  <div class="view hidden" id="view-timetable">
+    </div>
+    <div id="ls-sub-timetable" class="hidden">
     <div class="view-switch">
       <button data-vs="day" onclick="setTTView('day')">日视图</button>
       <button class="active" data-vs="week" onclick="setTTView('week')">周视图</button>
@@ -421,9 +426,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
     <div class="legend" id="tt-legend"></div>
     <div id="timetable-content"></div>
     <button class="fab" id="tt-fab" onclick="addLessonForCurrent()" title="新建课次">+</button>
-  </div>
-
-  <div class="view hidden" id="view-courses">
+    </div>
+    <div id="ls-sub-courses" class="hidden">
     <div class="filter-bar" id="courses-teacher-filter"></div>
     <div class="filter-bar" id="courses-subject-filter" style="margin-top:0"></div>
     <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
@@ -438,6 +442,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
     <div id="courses-stats" style="margin-bottom:8px"></div>
     <div id="courses-batch-bar" style="display:none;margin-bottom:8px"></div>
     <div id="courses-list"></div>
+    </div>
   </div>
 
   <div class="view hidden" id="view-supervision">
@@ -522,22 +527,18 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
     </div>
     <div class="card" style="font-size:11px;color:var(--text3);line-height:1.7">
       <b style="color:var(--text2)">使用说明</b><br>
-      1. 📚教学台：管理课次，支持1对1/1对2/班课/小组课/体验课/陪练课等<br>
-      2. 📅时间表：日/周/月视图自由切换(苹果日历风格)，点日期可跳转<br>
-      3. 📖课程：按科目分组管理所有课次，支持批量删除/改时间/改老师<br>
+      1. 📚教学台：课次/时间表/课程三合一，管理课次，支持1对1/1对2/班课/小组课/体验课/陪练课等<br>
+      2. 📍督学打卡：记录来访+学习打卡（背单词/拼写计数，听力/口语开关），个人详情/月历多视图，支持导出<br>
+      3. 🏫托班：记录每日到班/离班时间和各科作业完成情况（✓完成/◐部分/✗未做），按小学/初中分组查看，支持个人汇总和图片导出<br>
       4. 📝记录：日/周/月/年四视图，番茄TODO风格可视化<br>
-      5. 🎓学生管理：彩色方块显示课时进度，可加可减<br>
-      6. 📍督学打卡：记录来访+学习打卡（背单词/拼写计数，听力/口语开关），个人详情/月历/列表多视图，支持导出<br>
-      7. 🏫托班：开学季记录每日到班/离班时间和各科作业完成情况（✓完成/◐部分/✗未做），按小学/初中分组查看，支持个人汇总和图片导出<br>
-      8. 💾自动同步：腾讯云COS云端同步（国内直连），跨设备/跨浏览器自动同步数据<br>
-      9. 手机浏览器菜单"添加到主屏幕"可像App使用，更新后自动刷新
+      5. 👤我的：老师管理/云端同步/设置<br>
+      6. 💾自动同步：腾讯云COS云端同步（国内直连），跨设备/跨浏览器自动同步数据<br>
+      7. 手机浏览器菜单"添加到主屏幕"可像App使用，更新后自动刷新
     </div>
   </div>
 
   <div class="tabbar">
     <button class="active" data-tab="lessons" onclick="switchTab('lessons')"><span class="icon">📚</span>教学台</button>
-    <button data-tab="timetable" onclick="switchTab('timetable')"><span class="icon">📅</span>时间表</button>
-    <button data-tab="courses" onclick="switchTab('courses')"><span class="icon">📖</span>课程</button>
     <button data-tab="supervision" onclick="switchTab('supervision')"><span class="icon">📍</span>督学</button>
     <button data-tab="daycare" onclick="switchTab('daycare')"><span class="icon">🏫</span>托班</button>
     <button data-tab="records" onclick="switchTab('records')"><span class="icon">📝</span>记录</button>
@@ -581,7 +582,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.31.0';
+const APP_VERSION = 'v3.32.0';
 const APP_VERSION_DATE = '2026-09-01';
 
 const $ = s => document.querySelector(s);
@@ -1219,6 +1220,7 @@ function disableFreeSync(){
 
 /* ==================== Tab 切换 ==================== */
 let currentTab = 'lessons';
+let lsSubTab = 'lessons';
 function switchTab(name){
   currentTab = name;
   $$('.view').forEach(v=>v.classList.add('hidden'));
@@ -1229,13 +1231,26 @@ function switchTab(name){
   setSyncInd(false);
 }
 function refreshCurrentView(){
-  if(currentTab==='lessons') renderLessons();
-  if(currentTab==='timetable') renderTimetable();
-  if(currentTab==='courses') renderCourses();
+  if(currentTab==='lessons') refreshLsSub();
   if(currentTab==='supervision') renderSupervisions();
   if(currentTab==='daycare') renderDaycare();
   if(currentTab==='records') renderRecords();
   if(currentTab==='mine') renderMine();
+}
+/* 教学台二级切换：课次 / 时间表 / 课程 */
+function setLsSub(sub){
+  lsSubTab = sub;
+  $$('#ls-sub-switch button').forEach(b=>b.classList.toggle('active', b.dataset.lss===sub));
+  $('#ls-sub-lessons').classList.toggle('hidden', sub!=='lessons');
+  $('#ls-sub-timetable').classList.toggle('hidden', sub!=='timetable');
+  $('#ls-sub-courses').classList.toggle('hidden', sub!=='courses');
+  refreshLsSub();
+}
+function openMine(){ switchTab('mine'); }
+function refreshLsSub(){
+  if(lsSubTab==='lessons') renderLessons();
+  else if(lsSubTab==='timetable') renderTimetable();
+  else if(lsSubTab==='courses') renderCourses();
 }
 
 /* ==================== 弹窗 ==================== */
@@ -1320,7 +1335,7 @@ function renderLessons(){
     <button class="btn btn-primary btn-sm" style="flex:1;min-width:80px" onclick="openLessonEdit()">+ 新建课次</button>
     <button class="btn btn-ghost btn-sm" onclick="openBatchAdjust()">⏰ 批量调课</button>
     <button class="btn btn-ghost btn-sm" onclick="dedupLessons()">🔍 去重</button>
-    <button class="btn btn-ghost btn-sm" onclick="switchTab('timetable')">📅 时间表</button>
+    <button class="btn btn-ghost btn-sm" onclick="setLsSub('timetable')">📅 时间表</button>
     <button class="btn btn-sm ${lessonsMultiSelect?'btn-primary':'btn-ghost'}" onclick="toggleLessonsMultiSelect()">${lessonsMultiSelect?'✓ 完成':'☑ 多选'}</button>
   </div>`;
 
@@ -4767,7 +4782,7 @@ let ttModeFilter='all';
 
 function setTTView(v){
   ttView=v;
-  $$('#view-timetable .view-switch button').forEach(b=>b.classList.toggle('active',b.dataset.vs===v));
+  $$('#ls-sub-timetable .view-switch button').forEach(b=>b.classList.toggle('active',b.dataset.vs===v));
   $('#tt-week-box').style.display=v==='week'?'block':'none';
   $('#tt-month-box').style.display=v==='month'?'block':'none';
   $('#tt-day-box').style.display=v==='day'?'block':'none';
@@ -5160,7 +5175,7 @@ function renderBatchManageModal(){
 }
 function toggleBatchLesson(id){
   if(_batchSelected.has(id)) _batchSelected.delete(id); else _batchSelected.add(id);
-  if(currentTab==='courses' && courseBatchMode){
+  if(lsSubTab==='courses' && courseBatchMode){
     // 更新课程批量栏的计数和复选框
     const bar=$('#courses-batch-bar'); if(bar){
       const spans=bar.querySelectorAll('span');
@@ -5245,7 +5260,7 @@ function openBatchAdjustTime(){
 }
 function cancelBatchAdjust(){
   closeModal();
-  if(currentTab==='courses') renderCourses();
+  if(lsSubTab==='courses') renderCourses();
   else renderBatchManageModal();
 }
 function doBatchAdjustTime(){
@@ -5591,8 +5606,8 @@ function editSubjectNum(studentId, normSubject, field, currentVal, total, used){
         <div style="margin-top:6px">如需增减，请去：</div>
       </div>
       <div style="display:flex;gap:10px;margin-bottom:12px">
-        <button class="btn btn-primary btn-block" onclick="closeModal();switchTab('courses');setTimeout(()=>{window._courseSearch='${normSubject}';renderCourses();},50)">📖 去课程管理</button>
-        <button class="btn btn-ghost btn-block" onclick="closeModal();switchTab('schedule')">📅 去排课表</button>
+        <button class="btn btn-primary btn-block" onclick="closeModal();switchTab('lessons');setTimeout(()=>{setLsSub('courses');window._courseSearch='${normSubject}';renderCourses();},50)">📖 去课程管理</button>
+        <button class="btn btn-ghost btn-block" onclick="closeModal();switchTab('lessons');setTimeout(()=>setLsSub('timetable'),50)">📅 去排课表</button>
       </div>
       <div style="display:flex;gap:8px">
         <button class="btn btn-ghost btn-block" onclick="closeModal()">关闭</button>
@@ -8067,7 +8082,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v45';
+    const sw=`const C='tw-cache-v46';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
