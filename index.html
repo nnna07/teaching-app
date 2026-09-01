@@ -582,7 +582,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.32.0';
+const APP_VERSION = 'v3.32.1';
 const APP_VERSION_DATE = '2026-09-01';
 
 const $ = s => document.querySelector(s);
@@ -3180,11 +3180,11 @@ function exportSvMonth(){
   ensureHtml2Canvas(()=>{
     html2canvas(inner,{scale:2,backgroundColor:'#ffffff',useCORS:true}).then(canvas=>{
       wrap.remove();
-      const a=document.createElement('a');
-      a.download=`督学打卡_月历_${monthLabel}.png`;
-      a.href=canvas.toDataURL('image/png');
-      a.click();
-      toast('已保存到下载');
+      canvas.toBlob(blob=>{
+        if(!blob){ toast('导出失败：无法生成图片'); return; }
+        downloadBlob(blob,`督学打卡_月历_${monthLabel}.png`);
+        toast('✅ 图片已保存');
+      },'image/png');
     }).catch(e=>{
       wrap.remove();
       toast('导出失败：'+e.message);
@@ -3307,11 +3307,11 @@ function exportSvDayDetail(date){
   ensureHtml2Canvas(()=>{
     html2canvas(wrap.firstElementChild,{scale:2,backgroundColor:'#ffffff',useCORS:true}).then(canvas=>{
       wrap.remove();
-      const a=document.createElement('a');
-      a.download=`督学打卡_${date}.png`;
-      a.href=canvas.toDataURL('image/png');
-      a.click();
-      toast('已保存到下载');
+      canvas.toBlob(blob=>{
+        if(!blob){ toast('导出失败：无法生成图片'); return; }
+        downloadBlob(blob,`督学打卡_${date}.png`);
+        toast('✅ 图片已保存');
+      },'image/png');
     }).catch(e=>{
       wrap.remove();
       toast('导出失败：'+e.message);
@@ -6653,11 +6653,11 @@ function exportDcDay(){
   ensureHtml2Canvas(()=>{
     html2canvas(wrap,{scale:2,backgroundColor:'#fff'}).then(canvas=>{
       wrap.remove();
-      const a=document.createElement('a');
-      a.download=`托班记录_${dcDate}.png`;
-      a.href=canvas.toDataURL('image/png');
-      a.click();
-      toast('已保存到下载');
+      canvas.toBlob(blob=>{
+        if(!blob){ toast('导出失败：无法生成图片'); return; }
+        downloadBlob(blob,`托班记录_${dcDate}.png`);
+        toast('✅ 图片已保存');
+      },'image/png');
     }).catch(e=>{ wrap.remove(); toast('导出失败：'+e.message); });
   });
 }
@@ -8082,7 +8082,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v46';
+    const sw=`const C='tw-cache-v47';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
