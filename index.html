@@ -448,16 +448,10 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
   <div class="view hidden" id="view-supervision">
     <div class="card-h"><h3>📍 督学打卡</h3><div style="font-size:11px;color:var(--text3)">记录哪个学生今天来找你了</div></div>
     <div style="display:flex;gap:6px;margin-bottom:8px">
-      <button class="btn btn-primary" style="flex:1;font-size:13px;padding:9px" onclick="openSupervisionClock()">+ 记录来访</button>
-      <button class="btn btn-ghost" style="font-size:13px;padding:9px" onclick="openSupervisionClock(true)">+ 记录(现在)</button>
+      <button class="btn btn-primary" style="flex:1;font-size:13px;padding:9px" onclick="openSupervisionClock(true)">+ 记录来访</button>
       <button class="btn btn-ghost" style="font-size:13px;padding:9px" onclick="openSvExport()">📊 导出</button>
     </div>
-    <div class="view-switch" id="sv-view-switch" style="margin-bottom:8px">
-      <button data-svv="people" class="active" onclick="setSvView('people')">👤 个人</button>
-      <button data-svv="month" onclick="setSvView('month')">📅 月历</button>
-    </div>
     <div id="sv-subject-filter-bar" style="display:flex;gap:5px;overflow-x:auto;padding-bottom:6px;margin-bottom:4px"></div>
-    <div id="sv-ck-filter-bar" style="display:flex;gap:5px;overflow-x:auto;padding-bottom:6px;margin-bottom:4px"></div>
     <div id="sv-nav-box"></div>
     <div class="stat-grid" id="supervision-stats"></div>
     <div id="supervision-content"></div>
@@ -528,8 +522,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
     <div class="card" style="font-size:11px;color:var(--text3);line-height:1.7">
       <b style="color:var(--text2)">使用说明</b><br>
       1. 📚教学台：课次/时间表/课程三合一，支持1对1/1对2/班课/小组课/体验课/陪练课等；新建课次自动推荐空档时段，保存时自动检测老师/学生时间冲突（可忽略），周视图冲突红框警示<br>
-      2. 📍督学打卡：记录来访+学习打卡（背单词/拼写计数，听力/口语开关），个人详情/月历多视图，支持导出<br>
-      3. 🏫托班：记录每日到班/离班时间和各科作业完成情况（✓完成/◐部分/✗未做），按小学/初中分组查看，支持个人汇总和图片导出<br>
+      2. 📍督学打卡：记录来访+学习打卡（填数字自动记录），学生按最近来访排序、自动带出常用科目，个人/月历视图，支持导出<br>
+      3. 🏫托班：批量到班/一键批量离班，各科作业完成情况（✓完成/◐部分/✗未做），个人月历+个人报告图片导出<br>
       4. 📝记录：日/周/月/年四视图，番茄TODO风格可视化<br>
       5. 👤我的：老师管理/云端同步/设置<br>
       6. 💾自动同步：腾讯云COS云端同步（国内直连），跨设备/跨浏览器自动同步数据<br>
@@ -582,7 +576,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.33.0';
+const APP_VERSION = 'v3.34.0';
 const APP_VERSION_DATE = '2026-09-01';
 
 const $ = s => document.querySelector(s);
@@ -2037,7 +2031,7 @@ let svView='people';
 let svSubjectFilter='all';
 let svCkFilter='all'; // 打卡类型筛选: all/vocab/spell/listening/speaking
 let svMonthOffset=0;
-function setSvView(v){ svView=v; document.querySelectorAll('#sv-view-switch button').forEach(b=>b.classList.toggle('active',b.dataset.svv===v)); renderSupervisions(); }
+function setSvView(v){ svView=v; document.querySelectorAll('[data-svv]').forEach(b=>b.classList.toggle('active',b.dataset.svv===v)); renderSupervisions(); }
 function setSvSubjectFilter(s){ svSubjectFilter=s; renderSupervisions(); }
 function setSvCkFilter(c){ svCkFilter=c; renderSupervisions(); }
 function shiftSvMonth(d){ svMonthOffset+=d; renderSupervisions(); }
@@ -2093,7 +2087,13 @@ function openSupervisionClock(useNow, prefill={}){
   const editSubject = editRec ? editRec.subject : '';
   const editTime = editRec ? (editRec.time||'') : (prefill.time||'');
   const editNote = editRec ? (editRec.note||'') : '';
-  const students=Object.values(DB.data.students).filter(s=>!s._deleted).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const lastVisit={};
+  Object.values(DB.data.supervisions).filter(r=>!r._deleted).forEach(r=>{ const c=lastVisit[r.studentId]; if(!c||r.date>c) lastVisit[r.studentId]=r.date; });
+  const students=Object.values(DB.data.students).filter(s=>!s._deleted).sort((a,b)=>{
+    const la=lastVisit[a.id]||'', lb=lastVisit[b.id]||'';
+    if(la!==lb) return lb.localeCompare(la);
+    return (a.name||'').localeCompare(b.name||'');
+  });
   const subjects=getSvSubjects();
   const preSubject = editSubject || prefill.subject || (svSubjectFilter!=='all'?svSubjectFilter:'');
   const isCustomSubject = editSubject && !subjects.includes(editSubject);
@@ -2144,14 +2144,14 @@ function openSupervisionClock(useNow, prefill={}){
       <input type="text" class="form-control" id="sv-note" placeholder="如：来校区答疑 / 拿资料 / 家长沟通" value="${editNote}">
     </div>
     <div class="form-row">
-      <label>学习打卡 (可选，点击开启)</label>
+      <label>学习打卡 (可选，填数字自动记录)</label>
       <div id="sv-ck-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         ${CK_TYPES.map(t=>{
           const hasCount=t.hasCount;
           const editVal=editRec?(editRec[t.key]||0):0;
           const isActive=editRec?((hasCount&&editVal>0)||(!hasCount&&!!editRec[t.key])):false;
           const inputHtml=hasCount
-            ?`<input type="number" class="form-control sv-ck-input" data-ck="${t.key}" min="0" value="${editVal}" placeholder="0" onclick="event.stopPropagation()" style="text-align:center;font-size:16px;font-weight:600;display:${isActive?'block':'none'}">`
+            ?`<input type="number" class="form-control sv-ck-input" data-ck="${t.key}" min="0" value="${editVal}" placeholder="0" onclick="event.stopPropagation()" oninput="svCkInputOn('${t.key}')" style="text-align:center;font-size:16px;font-weight:600;margin-top:5px">`
             :'';
           return `<div class="sv-ck-card" data-ck="${t.key}" data-active="${isActive}" onclick="toggleSvCkCard('${t.key}')" style="border:2px solid ${isActive?t.color:'var(--border)'};border-radius:8px;padding:8px;cursor:pointer;background:${isActive?t.color+'10':'var(--bg)'};transition:all .15s">
             <div style="display:flex;align-items:center;gap:6px">
@@ -2178,6 +2178,16 @@ function onSvStudentChange(){
   // 选中学生后自动激活其常用打卡类型（只激活，不关闭已有的）
   const stuIds=[...document.querySelectorAll('#sv-students input[type=checkbox]:checked')].map(cb=>cb.value);
   if(stuIds.length===0) return;
+  // 只选一个学生且未选科目时，自动带出该学生最常用科目
+  if(stuIds.length===1){
+    const sel=$('#sv-subject');
+    if(sel && !sel.value){
+      const freq={};
+      Object.values(DB.data.supervisions).filter(r=>!r._deleted&&r.studentId===stuIds[0]).forEach(r=>{ const k=r.subject||''; if(k) freq[k]=(freq[k]||0)+1; });
+      const top=Object.entries(freq).sort((a,b)=>b[1]-a[1])[0];
+      if(top && [...sel.options].some(o=>o.value===top[0])) sel.value=top[0];
+    }
+  }
   // 收集所有选中学学生的打卡类型并集
   const typeSet=new Set();
   stuIds.forEach(sid=>getStudentCkTypes(sid).forEach(t=>typeSet.add(t)));
@@ -2205,11 +2215,19 @@ function toggleSvCkCard(key){
     circle.style.background=newActive?t.color:'transparent';
     circle.innerHTML=newActive?'<svg width="8" height="8" viewBox="0 0 8 8" style="fill:none;stroke:'+t.color+';stroke-width:2"><polyline points="1,4 3,6 7,2"/></svg>':'';
   }
-  // 显示/隐藏输入框（计数类型）
+  // 计数类型：取消勾选时清零输入框
   const input=card.querySelector('.sv-ck-input');
-  if(input) input.style.display=newActive?'block':'none';
+  if(input && !newActive) input.value='0';
 }
 function svSelectAllStudents(v){ document.querySelectorAll('#sv-students input[type=checkbox]').forEach(cb=>cb.checked=v); }
+function svCkInputOn(key){
+  const card=document.querySelector(`.sv-ck-card[data-ck="${key}"]`);
+  if(!card) return;
+  const input=card.querySelector('.sv-ck-input');
+  const v=parseInt(input&&input.value)||0;
+  if(v>0 && card.dataset.active!=='true') toggleSvCkCard(key);
+  if(v===0 && card.dataset.active==='true') toggleSvCkCard(key);
+}
 function saveSupervisionClock(editId=''){
   const subjVal=$('#sv-subject')?.value||'';
   let subject='';
@@ -2303,10 +2321,10 @@ function getFilteredSvList(){
     return (b.time||'').localeCompare(a.time||'');
   });
 }
-function renderSvSubjectFilter(){
-  const subjects=getSvSubjects();
+function renderSvFilterBar(){
   const bar=$('#sv-subject-filter-bar');
-  if(subjects.length===0){ bar.innerHTML=''; return; }
+  if(!bar) return;
+  const subjects=getSvSubjects();
   let html=`<button class="chip ${svSubjectFilter==='all'?'active':''}" onclick="setSvSubjectFilter('all')" style="font-size:11px;white-space:nowrap;padding:5px 10px">全部</button>`;
   subjects.forEach(s=>{
     const color=subjectColor(s);
@@ -2314,12 +2332,7 @@ function renderSvSubjectFilter(){
     html+=`<button class="chip ${isActive?'active':''}" onclick="setSvSubjectFilter('${s.replace(/'/g,"\\'")}')" style="font-size:11px;white-space:nowrap;padding:5px 10px;${isActive?'background:'+color+';color:#fff;border-color:'+color:'border-color:'+color+'40;color:'+color}">${s}</button>`;
   });
   html+=`<button class="chip" onclick="openSubjectManager()" style="font-size:11px;white-space:nowrap;padding:5px 10px;border-color:#9ca3af40;color:#6b7280">⚙️ 管理科目</button>`;
-  bar.innerHTML=html;
-}
-function renderSvCkFilter(){
-  const bar=$('#sv-ck-filter-bar');
-  if(!bar) return;
-  // 检测哪些打卡类型有数据
+  // 打卡类型筛选（有数据才追加在同一栏）
   const hasTypes={vocab:0,spell:0,listening:0,speaking:0};
   Object.values(DB.data.supervisions).filter(s=>!s._deleted).forEach(r=>{
     if((r.vocab||0)>0) hasTypes.vocab++;
@@ -2328,14 +2341,15 @@ function renderSvCkFilter(){
     if(r.speaking) hasTypes.speaking++;
   });
   const activeTypes=CK_TYPES.filter(t=>hasTypes[t.key]>0);
-  if(activeTypes.length===0){ bar.innerHTML=''; bar.style.display='none'; return; }
-  bar.style.display='flex';
-  let html=`<button class="chip ${svCkFilter==='all'?'active':''}" onclick="setSvCkFilter('all')" style="font-size:11px;white-space:nowrap;padding:5px 10px">全部打卡</button>`;
-  activeTypes.forEach(t=>{
-    const isActive=svCkFilter===t.key;
-    const count=hasTypes[t.key];
-    html+=`<button class="chip ${isActive?'active':''}" onclick="setSvCkFilter('${t.key}')" style="font-size:11px;white-space:nowrap;padding:5px 10px;${isActive?'background:'+t.color+';color:#fff;border-color:'+t.color:'border-color:'+t.color+'40;color:'+t.color}">${t.icon} ${t.label}${count>0?'('+count+')':''}</button>`;
-  });
+  if(activeTypes.length>0){
+    html+=`<span style="flex-shrink:0;width:1px;height:16px;background:var(--border);align-self:center;margin:0 2px"></span>`;
+    html+=`<button class="chip ${svCkFilter==='all'?'active':''}" onclick="setSvCkFilter('all')" style="font-size:11px;white-space:nowrap;padding:5px 10px">全部打卡</button>`;
+    activeTypes.forEach(t=>{
+      const isActive=svCkFilter===t.key;
+      const count=hasTypes[t.key];
+      html+=`<button class="chip ${isActive?'active':''}" onclick="setSvCkFilter('${t.key}')" style="font-size:11px;white-space:nowrap;padding:5px 10px;${isActive?'background:'+t.color+';color:#fff;border-color:'+t.color:'border-color:'+t.color+'40;color:'+t.color}">${t.icon} ${t.label}${count>0?'('+count+')':''}</button>`;
+    });
+  }
   bar.innerHTML=html;
 }
 /* ---- 科目标签管理 ---- */
@@ -2388,9 +2402,7 @@ function renameSubjectPrompt(oldName){
   toast('✓ 已将「'+oldName+'」重命名为「'+trimmed+'」（'+count+'条记录）');
 }
 function renderSupervisions(){
-  renderSvSubjectFilter();
-  renderSvCkFilter();
-  $('#sv-subject-filter-bar').style.display='flex';
+  renderSvFilterBar();
   const list=getFilteredSvList();
   const todayStr_=todayStr();
   const todayList=list.filter(s=>s.date===todayStr_);
@@ -2433,8 +2445,7 @@ function renderSupervisions(){
     renderSupervisionPeople(list);
   }
 }
-/* ==================== 每日学习打卡 ==================== */
-let ckDateOffset=0;
+/* ==================== 学习打卡类型 ==================== */
 const CK_TYPES=[
   {key:'vocab',label:'背单词',icon:'🔤',color:'#4f46e5',hasCount:true,unit:'词'},
   {key:'spell',label:'背拼写',icon:'✍️',color:'#059669',hasCount:true,unit:'词'},
@@ -2461,236 +2472,6 @@ function getStudentCkTypes(studentId){
     if(r.speaking && !used.includes('speaking')) used.push('speaking');
   });
   return used.length>0?used:CK_TYPES.map(t=>t.key); // 默认全部
-}
-function openCkTypeConfig(studentId){
-  const stu=DB.data.students[studentId];
-  if(!stu||stu._deleted) return;
-  const current=getStudentCkTypes(studentId);
-  let html=`<div style="margin-bottom:12px">
-    <div style="font-size:14px;font-weight:600;text-align:center;margin-bottom:4px">${stu.name} 的打卡类型</div>
-    <div style="font-size:11px;color:var(--text3);text-align:center">勾选该学生需要打卡的项目，其余将不显示</div>
-  </div>`;
-  CK_TYPES.forEach(t=>{
-    const checked=current.includes(t.key);
-    html+=`<label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;cursor:pointer" onclick="this.querySelector('input').click()">
-      <input type="checkbox" data-cktype="${t.key}" ${checked?'checked':''} style="width:20px;height:20px;accent-color:${t.color}">
-      <div style="display:flex;align-items:center;gap:6px;flex:1">
-        <span style="font-size:20px">${t.icon}</span>
-        <div><div style="font-size:13px;font-weight:600">${t.label}</div><div style="font-size:10px;color:var(--text3)">${t.hasCount?'计数（输入数量）':'开关（打/未打）'}</div></div>
-      </div>
-    </label>`;
-  });
-  const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="saveCkTypeConfig('${studentId}')">✓ 保存</button>`;
-  openModal(html,footer);
-  setSheetTitle('⚙️ 打卡类型设置');
-}
-function saveCkTypeConfig(studentId){
-  const types=CK_TYPES.filter(t=>$(`[data-cktype="${t.key}"]`).checked).map(t=>t.key);
-  if(types.length===0){ toast('至少选择一项'); return; }
-  const stu=DB.data.students[studentId];
-  stu.ckTypes=types;
-  stu.updatedAt=now();
-  DB.save();
-  closeModal();
-  renderCheckins();
-  toast('✓ 打卡类型已更新');
-}
-function getCkDate(offset){
-  const d=new Date();
-  d.setDate(d.getDate()+offset);
-  return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
-}
-function shiftCkDate(d){ ckDateOffset+=d; renderCheckins(); }
-function goCkToday(){ ckDateOffset=0; renderCheckins(); }
-function getCkRecord(studentId,date){
-  return Object.values(DB.data.checkins).find(c=>!c._deleted && c.studentId===studentId && c.date===date);
-}
-function getOrInitCkRecord(studentId,date){
-  let rec=getCkRecord(studentId,date);
-  if(!rec){
-    const id=uid(); const t=now();
-    rec={id,studentId,date,vocab:0,spell:0,listening:false,speaking:false,note:'',createdAt:t,updatedAt:t};
-    DB.data.checkins[id]=rec;
-  }
-  return rec;
-}
-function renderCheckins(){
-  const date=getCkDate(ckDateOffset);
-  const today=todayStr();
-  const isToday=date===today;
-  const students=Object.values(DB.data.students).filter(s=>!s._deleted).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  // 获取当天所有打卡记录
-  const dayRecords=students.map(st=>{
-    const rec=getCkRecord(st.id,date);
-    return {stu:st, rec};
-  });
-  // 统计：只统计至少一个学生在用的类型
-  const allUsedTypes=new Set();
-  students.forEach(st=>getStudentCkTypes(st.id).forEach(t=>allUsedTypes.add(t)));
-  let vocabTotal=0, spellTotal=0, listenCount=0, speakCount=0, stuDoneCount=0;
-  dayRecords.forEach(({stu,rec})=>{
-    if(!rec) return;
-    const types=getStudentCkTypes(stu.id);
-    if(types.includes('vocab')&&rec.vocab>0){ vocabTotal+=rec.vocab; stuDoneCount++; }
-    if(types.includes('spell')&&rec.spell>0){ spellTotal+=rec.spell; }
-    if(types.includes('listening')&&rec.listening) listenCount++;
-    if(types.includes('speaking')&&rec.speaking) speakCount++;
-  });
-  // stats: 只显示在用的类型
-  const statsHtml=CK_TYPES.filter(t=>allUsedTypes.has(t.key)).map(t=>{
-    const val=t.key==='vocab'?vocabTotal:t.key==='spell'?spellTotal:t.key==='listening'?listenCount:speakCount;
-    return `<div class="stat-card"><div class="s-num" style="color:${t.color}">${val}</div><div class="s-lbl">${t.icon}${t.label}</div></div>`;
-  }).join('');
-  // nav
-  $('#sv-nav-box').innerHTML=`<div class="rec-nav">
-    <button class="rn-btn" onclick="shiftCkDate(-1)">‹</button>
-    <span class="rn-lbl">${date.slice(5)}${isToday?' (今天)':''}</span>
-    <button class="rn-btn" onclick="shiftCkDate(1)">›</button>
-    ${!isToday?'<button class="rn-today" onclick="goCkToday()">今天</button>':''}
-  </div>`;
-  // stats
-  $('#supervision-stats').innerHTML=statsHtml;
-  // content
-  const cont=$('#supervision-content');
-  if(students.length===0){
-    cont.innerHTML=`<div class="card"><div class="empty" style="padding:30px"><div class="em-ico">📋</div><div style="margin-top:8px">还没有学生</div><div style="font-size:12px;color:var(--text3);margin-top:4px">请先在"我的"页面添加学生</div></div></div>`;
-    return;
-  }
-  let html='';
-  // 日期标题
-  html+=`<div style="text-align:center;font-size:12px;color:var(--text3);margin-bottom:8px">${date} · 共 ${students.length} 名学生 · ${stuDoneCount} 名已打卡</div>`;
-  // 每个学生一张卡片
-  dayRecords.forEach(({stu,rec})=>{
-    const subjects=getStudentSubjects(stu.id);
-    const subjColor=subjects.length?subjectColor(subjects[0].name):'#4f46e5';
-    const types=getStudentCkTypes(stu.id);
-    const typeCount=types.length;
-    // 判断每种类型是否完成
-    const doneMap={};
-    types.forEach(tk=>{
-      const td=CK_TYPES.find(t=>t.key===tk);
-      if(!td) return;
-      if(td.hasCount) doneMap[tk]=rec&&(rec[tk]||0)>0;
-      else doneMap[tk]=rec&&!!rec[tk];
-    });
-    const doneCount=Object.values(doneMap).filter(Boolean).length;
-    const allDone=doneCount===typeCount;
-    const gridCol=typeCount===1?'1fr':typeCount===2?'1fr 1fr':typeCount===3?'1fr 1fr 1fr':'1fr 1fr';
-    html+=`<div class="card" style="margin-bottom:8px;padding:10px 12px;${allDone?'border-color:'+subjColor+'60':''}">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <div style="width:28px;height:28px;border-radius:50%;background:${subjColor}20;color:${subjColor};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0">${stu.name.charAt(0)}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:600;font-size:13px">${stu.name}</div>
-          <div style="font-size:10px;color:var(--text3)">${stu.grade||''} ${subjects.length?'· '+subjects.map(s=>s.name).join('/'):''}</div>
-        </div>
-        ${allDone?'<span style="font-size:11px;color:#059669;font-weight:600">✓ 完成</span>':doneCount>0?`<span style="font-size:10px;color:var(--text3)">${doneCount}/${typeCount}</span>`:''}
-        <button onclick="openCkTypeConfig('${stu.id}')" style="border:none;background:transparent;font-size:14px;padding:4px;cursor:pointer;opacity:.5" title="设置打卡类型">⚙️</button>
-      </div>
-      <div style="display:grid;grid-template-columns:${gridCol};gap:6px">
-        ${types.map(tk=>{
-          const t=CK_TYPES.find(x=>x.key===tk); if(!t) return '';
-          let done=false; let valText='';
-          if(rec){
-            if(t.hasCount){
-              const val=rec[t.key]||0;
-              done=val>0;
-              valText=done?`${val}${t.unit}`:'';
-            } else {
-              done=!!rec[t.key];
-              valText=done?'✓':'';
-            }
-          }
-          return `<button onclick="quickCkToggle('${stu.id}','${t.key}')" style="
-            border:1.5px solid ${done?t.color+'40':'var(--border)'};
-            border-radius:8px;padding:8px 6px;background:${done?t.color+'10':'var(--bg)'};
-            cursor:pointer;text-align:center;transition:all .15s;
-            ${done?'box-shadow:0 1px 3px '+t.color+'20':''}
-          ">
-            <div style="font-size:16px">${t.icon}</div>
-            <div style="font-size:10px;color:var(--text3);margin-top:2px">${t.label}</div>
-            <div style="font-size:12px;font-weight:600;color:${done?t.color:'var(--text3)'};margin-top:2px">${valText||'—'}</div>
-          </button>`;
-        }).join('')}
-      </div>
-      ${rec&&rec.note?`<div style="margin-top:6px;font-size:11px;color:var(--text3);padding:4px 6px;background:var(--bg);border-radius:6px">📝 ${rec.note}</div>`:''}
-    </div>`;
-  });
-  cont.innerHTML=html;
-}
-function quickCkToggle(studentId,typeKey){
-  const date=getCkDate(ckDateOffset);
-  const rec=getOrInitCkRecord(studentId,date);
-  const typeDef=CK_TYPES.find(t=>t.key===typeKey);
-  if(typeDef.hasCount){
-    // 计数类：弹出输入框
-    const currentVal=rec[typeKey]||0;
-    const html=`
-      <div style="text-align:center;margin-bottom:12px">
-        <div style="font-size:32px">${typeDef.icon}</div>
-        <div style="font-size:14px;font-weight:600;margin-top:4px">${typeDef.label}</div>
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">${date}</div>
-      </div>
-      <div class="form-row">
-        <label>数量 (${typeDef.unit})</label>
-        <div style="display:flex;align-items:center;gap:8px">
-          <button class="btn btn-ghost btn-sm" onclick="ckAdjust(-5)" style="font-size:14px;padding:6px 12px;min-width:40px">-5</button>
-          <button class="btn btn-ghost btn-sm" onclick="ckAdjust(-1)" style="font-size:14px;padding:6px 12px;min-width:36px">-1</button>
-          <input type="number" id="ck-count-input" class="form-control" value="${currentVal}" min="0" style="text-align:center;font-size:18px;font-weight:600;flex:1" onfocus="this.select()">
-          <button class="btn btn-ghost btn-sm" onclick="ckAdjust(1)" style="font-size:14px;padding:6px 12px;min-width:36px">+1</button>
-          <button class="btn btn-ghost btn-sm" onclick="ckAdjust(5)" style="font-size:14px;padding:6px 12px;min-width:40px">+5</button>
-        </div>
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-        ${[10,20,30,50].map(v=>`<button class="chip" onclick="$('#ck-count-input').value=${v}" style="font-size:11px;padding:4px 10px">${v}</button>`).join('')}
-      </div>
-      <div class="form-row" style="margin-top:10px">
-        <label>备注 (可选)</label>
-        <input type="text" class="form-control" id="ck-note-input" placeholder="如：Unit 3 单词" value="${rec.note||''}">
-      </div>`;
-    const footer=`
-      ${currentVal>0?`<button class="btn btn-ghost" style="flex:1" onclick="ckClearCount('${studentId}','${typeKey}')">清除</button>`:''}
-      <button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button>
-      <button class="btn btn-primary" style="flex:2" onclick="ckSaveCount('${studentId}','${typeKey}')">✓ 保存</button>`;
-    openModal(html,footer);
-    setSheetTitle(`${typeDef.icon} ${typeDef.label}`);
-    setTimeout(()=>{const inp=$('#ck-count-input'); if(inp){inp.focus();inp.select();}},100);
-  } else {
-    // 开关类：直接切换
-    rec[typeKey]=!rec[typeKey];
-    rec.updatedAt=now();
-    DB.save();
-    renderCheckins();
-    toast(rec[typeKey]?'✓ '+typeDef.label+' 已打卡':'已取消 '+typeDef.label);
-  }
-}
-function ckAdjust(d){
-  const inp=$('#ck-count-input');
-  if(inp){ let v=parseInt(inp.value)||0; v=Math.max(0,v+d); inp.value=v; }
-}
-function ckSaveCount(studentId,typeKey){
-  const date=getCkDate(ckDateOffset);
-  const rec=getOrInitCkRecord(studentId,date);
-  const count=parseInt($('#ck-count-input').value)||0;
-  const note=$('#ck-note-input').value.trim();
-  rec[typeKey]=count;
-  rec.note=note;
-  rec.updatedAt=now();
-  DB.save();
-  closeModal();
-  renderCheckins();
-  toast(`✓ 已记录 ${CK_TYPES.find(t=>t.key===typeKey).label} ${count>0?count+'词':'已清除'}`);
-}
-function ckClearCount(studentId,typeKey){
-  const date=getCkDate(ckDateOffset);
-  const rec=getCkRecord(studentId,date);
-  if(rec){
-    rec[typeKey]=0;
-    rec.updatedAt=now();
-    DB.save();
-  }
-  closeModal();
-  renderCheckins();
-  toast('已清除');
 }
 function getCkSummary(studentId){
   // 从督学记录中读取打卡数据
@@ -2772,11 +2553,17 @@ function getCkSummary(studentId){
 /* ---- 个人视图 ---- */
 function renderSupervisionPeople(list){
   const cont=$('#supervision-content');
-  $('#sv-nav-box').innerHTML=`<div class="rec-nav">
-    <button class="rn-btn" onclick="shiftSvMonth(-1)">‹</button>
-    <span class="rn-lbl">${getMonthDates(svMonthOffset).monthLabel}</span>
-    <button class="rn-btn" onclick="shiftSvMonth(1)">›</button>
-    <button class="rn-today" onclick="goSvThisMonth()">本月</button>
+  $('#sv-nav-box').innerHTML=`<div style="display:flex;gap:6px;margin-bottom:8px;align-items:stretch">
+    <div class="view-switch" style="margin:0;flex-shrink:0">
+      <button data-svv="people" onclick="setSvView('people')">👤 个人</button>
+      <button data-svv="month" onclick="setSvView('month')">📅 月历</button>
+    </div>
+    <div class="rec-nav" style="margin:0;flex:1;min-width:0">
+      <button class="rn-btn" onclick="shiftSvMonth(-1)">‹</button>
+      <span class="rn-lbl">${getMonthDates(svMonthOffset).monthLabel}</span>
+      <button class="rn-btn" onclick="shiftSvMonth(1)">›</button>
+      <button class="rn-today" onclick="goSvThisMonth()">本月</button>
+    </div>
   </div>`;
   // 获取所有有打卡记录的学生
   const studentIds=[...new Set(list.map(s=>s.studentId))];
@@ -2842,7 +2629,7 @@ function renderSupervisionPeople(list){
           <div style="font-weight:600;font-size:14px">${st.name}</div>
           <div style="font-size:10px;color:var(--text3)">${st.grade||''}</div>
         </div>
-        <button class="btn btn-sm btn-ghost" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openSupervisionClock(false,{studentId:'${st.sid}',subject:'${svSubjectFilter!=='all'?svSubjectFilter:''}'})">+记录</button>
+        <button class="btn btn-sm btn-ghost" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openSupervisionClock(true,{studentId:'${st.sid}',subject:'${svSubjectFilter!=='all'?svSubjectFilter:''}'})">+记录</button>
       </div>
       <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;margin-bottom:2px">
         ${['一','二','三','四','五','六','日'].map(w=>`<div style="text-align:center;font-size:8px;color:var(--text3);height:12px;line-height:12px">${w}</div>`).join('')}
@@ -2893,7 +2680,7 @@ function showSvPersonDay(studentId, date){
       </div>
     </div>`;
   });
-  html+=`<button class="btn btn-ghost" style="width:100%;margin-top:6px" onclick="closeModal();openSupervisionClock(false,{studentId:'${studentId}',date:'${date}'})">+ 为这天添加记录</button>`;
+  html+=`<button class="btn btn-ghost" style="width:100%;margin-top:6px" onclick="closeModal();openSupervisionClock(true,{studentId:'${studentId}',date:'${date}'})">+ 为这天添加记录</button>`;
   const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button>`;
   openModal(html,footer);
   setSheetTitle('📍 '+stuName+' '+date.slice(5));
@@ -2980,7 +2767,7 @@ function showSvPersonDetail(studentId){
       <div style="font-size:16px;font-weight:700">${stuName}</div>
       <div style="font-size:11px;color:var(--text3)">${stuGrade||'—'} · 共${totalDays}天${totalVisits}次</div>
     </div>
-    <button class="btn btn-sm btn-ghost" onclick="closeModal();openSupervisionClock(false,{studentId:'${studentId}'})" style="flex-shrink:0">+记录</button>
+    <button class="btn btn-sm btn-ghost" onclick="closeModal();openSupervisionClock(true,{studentId:'${studentId}'})" style="flex-shrink:0">+记录</button>
   </div>`;
   // 统计网格
   html+=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:14px">
@@ -3112,12 +2899,18 @@ function toggleSvRecent(total, initCount){
 /* ---- 月历视图 ---- */
 function renderSupervisionMonth(list){
   const {dates,monthLabel,year,month}=getMonthDates(svMonthOffset);
-  $('#sv-nav-box').innerHTML=`<div class="rec-nav">
-    <button class="rn-btn" onclick="shiftSvMonth(-1)">‹</button>
-    <span class="rn-lbl">${monthLabel}</span>
-    <button class="rn-btn" onclick="shiftSvMonth(1)">›</button>
-    <button class="rn-today" onclick="goSvThisMonth()">本月</button>
-    <button class="rn-today" onclick="exportSvMonth()">📤 导出</button>
+  $('#sv-nav-box').innerHTML=`<div style="display:flex;gap:6px;margin-bottom:8px;align-items:stretch">
+    <div class="view-switch" style="margin:0;flex-shrink:0">
+      <button data-svv="people" onclick="setSvView('people')">👤 个人</button>
+      <button data-svv="month" onclick="setSvView('month')">📅 月历</button>
+    </div>
+    <div class="rec-nav" style="margin:0;flex:1;min-width:0">
+      <button class="rn-btn" onclick="shiftSvMonth(-1)">‹</button>
+      <span class="rn-lbl">${monthLabel}</span>
+      <button class="rn-btn" onclick="shiftSvMonth(1)">›</button>
+      <button class="rn-today" onclick="goSvThisMonth()">本月</button>
+      <button class="rn-today" onclick="exportSvMonth()">📤</button>
+    </div>
   </div>`;
   const monthPrefix=`${year}-${pad2(month+1)}-`;
   const monthList=list.filter(s=>s.date.startsWith(monthPrefix));
@@ -3129,7 +2922,7 @@ function renderSupervisionMonth(list){
       ${dates.map(d=>{
         const isToday=d.date===todayStr();
         const dayNum=parseInt(d.date.slice(8));
-        return `<div class="hc-cell ${d.other?'other':''} ${isToday?'today':''}" style="background:#f3f4f6" onclick="openSupervisionClock()">
+        return `<div class="hc-cell ${d.other?'other':''} ${isToday?'today':''}" style="background:#f3f4f6" onclick="openSupervisionClock(true)">
           <div class="hc-day">${dayNum}</div>
         </div>`;
       }).join('')}
@@ -3148,7 +2941,7 @@ function renderSupervisionMonth(list){
     const bg=count>0?'#eef2ff':'#f3f4f6';
     const subjColors=[...new Set(items.map(s=>subjectColor(s.subject||'未分类')))];
     const dots=subjColors.slice(0,4).map(c=>`<span style="width:5px;height:5px;border-radius:50%;background:${c};display:inline-block"></span>`).join(' ');
-    html+=`<div class="hc-cell ${d.other?'other':''} ${isToday?'today':''}" style="background:${bg};${count>0?'cursor:pointer':''}" onclick="${count>0?`showSvDay('${d.date}')`:`openSupervisionClock()`}">
+    html+=`<div class="hc-cell ${d.other?'other':''} ${isToday?'today':''}" style="background:${bg};${count>0?'cursor:pointer':''}" onclick="${count>0?`showSvDay('${d.date}')`:`openSupervisionClock(true)`}">
       <div class="hc-day" style="${count>0?'font-weight:600':''}">${parseInt(d.date.slice(8))}</div>
       ${count>0?`<div class="hc-num" style="color:var(--primary)">${count}</div>`:''}
       ${count>0?`<div style="margin-top:1px;display:flex;gap:2px;justify-content:center">${dots}</div>`:''}
@@ -3232,7 +3025,7 @@ function showSvDay(date){
     });
     html+=`</div>`;
   });
-  html+=`<button class="btn btn-ghost" style="width:100%;margin-top:6px" onclick="closeModal();openSupervisionClock()">+ 为这天添加记录</button>`;
+  html+=`<button class="btn btn-ghost" style="width:100%;margin-top:6px" onclick="closeModal();openSupervisionClock(true,{date:'${date}'})">+ 为这天添加记录</button>`;
   const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button>`;
   openModal(html,footer);
   setSheetTitle('📍 '+date.slice(5)+' 打卡详情');
@@ -6520,6 +6313,16 @@ function setDcView(v){ dcView=v; dcPersonId=''; document.querySelectorAll('#dc-v
 function shiftDcDate(d){ const x=new Date(dcDate+'T00:00:00'); x.setDate(x.getDate()+d); dcDate=fmtDate(x); renderDaycare(); }
 function goDcToday(){ dcDate=todayStr(); renderDaycare(); }
 function backDcPeople(){ dcPersonId=''; renderDaycare(); }
+let dcUnShown=false;
+function toggleDcUn(){ dcUnShown=!dcUnShown; renderDaycare(); }
+function batchDcLeave(){
+  const time=new Date().toTimeString().slice(0,5);
+  const recs=getDaycareRecords(dcDate).filter(r=>!r.leave);
+  if(!recs.length){ toast('当天没有待离班的记录'); return; }
+  if(!confirm('为 '+recs.length+' 名学生记录离班时间 '+time+' ？')) return;
+  recs.forEach(r=>{ r.leave=time; r.updatedAt=now(); });
+  DB.save(); renderDaycare(); toast('✓ 已记录 '+recs.length+' 人离班（'+time+'）');
+}
 function showDcPerson(sid){ dcPersonId=sid; renderDaycare(); }
 function allDaycareRecords(){ return Object.values(DB.data.daycare).filter(r=>!r._deleted); }
 function getDaycareRecords(date){ return allDaycareRecords().filter(r=>r.date===date); }
@@ -6528,6 +6331,21 @@ function dcAllSubjects(){
   const set=new Set(DC_SUBJECTS_DEFAULT);
   allDaycareRecords().forEach(r=>(r.homework||[]).forEach(h=>{ if(h.s) set.add(h.s); }));
   return [...set];
+}
+function dcHwSubjects(studentId){
+  // 按使用频率排序（该学生优先，再看全体），默认科目垫底按名称排
+  const freq={};
+  allDaycareRecords().forEach(r=>{
+    const w=(studentId&&r.studentId===studentId)?5:1;
+    (r.homework||[]).forEach(h=>{ if(h.s) freq[h.s]=(freq[h.s]||0)+w; });
+  });
+  return dcAllSubjects().sort((a,b)=>{
+    const fa=freq[a]||0, fb=freq[b]||0;
+    if(fa!==fb) return fb-fa;
+    const da=DC_SUBJECTS_DEFAULT.includes(a)?1:0, db=DC_SUBJECTS_DEFAULT.includes(b)?1:0;
+    if(da!==db) return db-da;
+    return a.localeCompare(b);
+  });
 }
 function gradeGroup(g){
   if(!g) return '其他';
@@ -6562,7 +6380,8 @@ function renderDcDay(){
     <button class="btn btn-sm btn-ghost" onclick="shiftDcDate(1)">后一天 ›</button>
   </div>
   <div style="display:flex;gap:6px;margin-bottom:8px">
-    <button class="btn btn-primary" style="flex:1;font-size:12px;padding:8px" onclick="openDcQuick()">+ 记录托班（批量到班）</button>
+    <button class="btn btn-primary" style="flex:1;font-size:12px;padding:8px" onclick="openDcQuick()">+ 批量到班</button>
+    <button class="btn btn-ghost" style="font-size:12px;padding:8px" onclick="batchDcLeave()">🚪 批量离班</button>
     <button class="btn btn-ghost" style="font-size:12px;padding:8px" onclick="exportDcDay()">📤 导出</button>
   </div>`;
   const students=Object.values(DB.data.students).filter(s=>!s._deleted);
@@ -6593,7 +6412,10 @@ function renderDcDay(){
       </div>`;
     });
     if(un.length){
-      html+=`<div style="display:grid;grid-template-columns:repeat(${Math.min(4,un.length)},1fr);gap:6px;margin-bottom:6px">`+un.map(s=>`<button class="btn btn-ghost" style="font-size:12px;padding:10px 4px;display:flex;flex-direction:column;gap:2px" onclick="openDcEdit('${s.id}')"><span style="font-weight:600">${s.name}</span><span style="font-size:10px;color:var(--text3)">${s.grade||'未分年级'}</span></button>`).join('')+`</div>`;
+      html+=`<button class="btn btn-ghost" style="width:100%;font-size:11px;padding:6px;margin-bottom:6px;color:var(--text3)" onclick="toggleDcUn()">${dcUnShown?'▾ 收起':'▸ 展开'}未记录学生（${un.length}）</button>`;
+      if(dcUnShown){
+        html+=`<div style="display:grid;grid-template-columns:repeat(${Math.min(4,un.length)},1fr);gap:6px;margin-bottom:6px">`+un.map(s=>`<button class="btn btn-ghost" style="font-size:12px;padding:10px 4px;display:flex;flex-direction:column;gap:2px" onclick="openDcEdit('${s.id}')"><span style="font-weight:600">${s.name}</span><span style="font-size:10px;color:var(--text3)">${s.grade||'未分年级'}</span></button>`).join('')+`</div>`;
+      }
     }
   });
   if(!students.length) html=`<div class="card" style="text-align:center;color:var(--text3);font-size:12px;padding:24px">暂无学生，请先在「我的」页面添加</div>`;
@@ -6644,6 +6466,7 @@ function renderDcPerson(studentId){
   $('#dc-nav-box').innerHTML=`<div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
     <button class="btn btn-sm btn-ghost" onclick="backDcPeople()">‹ 返回</button>
     <span style="font-weight:700;font-size:15px">${s.name}</span>${gradeTag(s.grade)}
+    <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="exportDcPerson('${studentId}')">📤 导出</button>
   </div>`;
   const hs=hwStat(rs); const hwTotal=hs.done+hs.partial+hs.none;
   const monthPrefix=todayStr().slice(0,7);
@@ -6657,7 +6480,34 @@ function renderDcPerson(studentId){
   const subjStat={};
   rs.forEach(r=>(r.homework||[]).forEach(h=>{ if(!subjStat[h.s]) subjStat[h.s]={done:0,partial:0,none:0}; if(subjStat[h.s][h.st]!==undefined) subjStat[h.s][h.st]++; }));
   const subjKeys=Object.keys(subjStat).sort();
-  let html='';
+  // 本月托班日历（绿=作业全完成 黄=有部分/未做 红=全未做 蓝=仅到班未记作业）
+  const md=getMonthDates(0);
+  const recByDate={}; rs.forEach(r=>{ if(!recByDate[r.date]) recByDate[r.date]=r; });
+  let calCells='';
+  md.dates.forEach(d=>{
+    const r=recByDate[d.date];
+    const isToday=d.date===todayStr();
+    let bg='#f0f1f3', sub='';
+    if(r){
+      const h=hwStat([r]); const tot=h.done+h.partial+h.none;
+      if(tot>0) bg=(h.done===tot)?'#86efac':((h.done+h.partial>0)?'#fde68a':'#fca5a5');
+      else bg='#bfdbfe';
+      const dur=dcDuration(r);
+      sub=dur>=60?(Math.round(dur/60)+'h'):(dur?dur+'m':'✓');
+    }
+    calCells+=`<div style="height:22px;border-radius:3px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:${bg};${d.other?'opacity:.25;':''}${isToday?'box-shadow:0 0 0 1px var(--red);':''}${r?'cursor:pointer;':''}" ${r?`onclick="openDcEdit('${studentId}','${r.id}')"`:''}>${r?`<span style="font-size:6px;line-height:1;opacity:.85">${parseInt(d.date.slice(8))}</span><span style="font-size:8px;line-height:1.2;font-weight:700;color:#333">${sub}</span>`:`<span style="font-size:7px;line-height:1;color:var(--text3)">${parseInt(d.date.slice(8))}</span>`}</div>`;
+  });
+  let html=`<div class="card" style="margin-bottom:10px;padding:12px">
+    <div style="font-size:12px;font-weight:600;margin-bottom:6px">📅 ${md.monthLabel} 托班日历</div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;margin-bottom:2px">${['一','二','三','四','五','六','日'].map(w=>`<div style="text-align:center;font-size:8px;color:var(--text3);height:12px;line-height:12px">${w}</div>`).join('')}</div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px">${calCells}</div>
+    <div style="display:flex;gap:6px;margin-top:6px;font-size:9px;color:var(--text3);align-items:center;flex-wrap:wrap">
+      <span style="width:10px;height:10px;border-radius:2px;background:#86efac;display:inline-block"></span>全完成
+      <span style="width:10px;height:10px;border-radius:2px;background:#fde68a;display:inline-block"></span>部分
+      <span style="width:10px;height:10px;border-radius:2px;background:#fca5a5;display:inline-block"></span>未做
+      <span style="width:10px;height:10px;border-radius:2px;background:#bfdbfe;display:inline-block"></span>仅到班
+    </div>
+  </div>`;
   if(subjKeys.length){
     html+=`<div class="card-h" style="margin:6px 0 8px"><h3>📚 作业统计（按科目）</h3></div><div class="card" style="padding:0;margin-bottom:10px;overflow:hidden"><table style="width:100%;border-collapse:collapse;font-size:12px">
       <tr style="background:var(--bg)"><th style="padding:8px;text-align:left">科目</th><th style="padding:8px">✓完成</th><th style="padding:8px">◐部分</th><th style="padding:8px">✗未做</th><th style="padding:8px">完成率</th></tr>
@@ -6710,13 +6560,24 @@ function saveDcQuick(){
 }
 function dcHwRow(subj,h){
   const st=(h&&h.st)||'';
+  const hasNote=!!((h&&h.note)||'');
   return `<div class="dc-hw-row" data-subject="${subj}" data-status="${st}" style="padding:6px 0;border-bottom:1px dashed var(--border)">
     <div style="display:flex;align-items:center;gap:5px">
-      <span style="width:56px;font-size:13px;font-weight:600;flex-shrink:0">${subj}</span>
-      ${DC_STATUS.map(x=>`<button class="btn btn-sm btn-ghost dc-hw-btn" data-st="${x.k}" onclick="setDcHwStatus(this)" style="font-size:11px;padding:4px 8px;${st===x.k?`border-color:${x.c};color:${x.c};background:${x.bg}`:''}">${x.t}</button>`).join('')}
+      <span style="width:48px;font-size:13px;font-weight:600;flex-shrink:0">${subj}</span>
+      ${DC_STATUS.map(x=>`<button class="btn btn-sm btn-ghost dc-hw-btn" data-st="${x.k}" onclick="setDcHwStatus(this)" style="font-size:11px;padding:4px 8px;${st===x.k?`border-color:${x.c};color:${x.c};background:${x.bg}`:''}">${x.t.slice(0,1)}</button>`).join('')}
+      <button class="btn btn-sm btn-ghost" type="button" style="font-size:11px;padding:4px 7px;margin-left:auto;${hasNote?'color:#d97706;border-color:#d9770660':''}" onclick="toggleDcHwNote(this)" title="备注">📝</button>
     </div>
-    <input class="form-control dc-hw-note" style="margin-top:5px;font-size:12px" placeholder="备注(可选)，如：还剩口算一页" value="${((h&&h.note)||'').replace(/"/g,'&quot;')}">
+    <input class="form-control dc-hw-note" style="margin-top:5px;font-size:12px;${hasNote?'':'display:none'}" placeholder="备注(可选)，如：还剩口算一页" value="${((h&&h.note)||'').replace(/"/g,'&quot;')}">
   </div>`;
+}
+function toggleDcHwNote(btn){
+  const row=btn.closest('.dc-hw-row');
+  const inp=row.querySelector('.dc-hw-note');
+  const show=inp.style.display==='none';
+  inp.style.display=show?'':'none';
+  btn.style.color=show?'#d97706':'';
+  btn.style.borderColor=show?'#d9770660':'';
+  if(show) inp.focus();
 }
 function setDcHwStatus(btn){
   const row=btn.closest('.dc-hw-row');
@@ -6750,7 +6611,7 @@ function openDcEdit(studentId,editId){
     <div style="flex:1"><label>离班</label><input type="time" class="form-control" id="dc-leave" value="${(r&&r.leave)||''}"></div>
   </div></div>
   <div style="font-size:12px;font-weight:600;color:var(--text2);margin:4px 0">📚 作业完成情况</div>
-  <div id="dc-hw-list">${dcAllSubjects().map(subj=>dcHwRow(subj,hwMap[subj])).join('')}</div>
+  <div id="dc-hw-list">${dcHwSubjects(studentId).map(subj=>dcHwRow(subj,hwMap[subj])).join('')}</div>
   <button class="btn btn-sm btn-ghost" style="margin-top:6px" onclick="addDcHwRow()">＋ 添加科目</button>
   <div class="form-row" style="margin-top:8px"><label>备注</label><textarea class="form-control" id="dc-note" rows="2" placeholder="今天的表现/特殊情况...">${(r&&r.note)||''}</textarea></div>`;
   const footer=(r?`<button class="btn btn-danger" style="flex:1" onclick="delDaycareRecord('${r.id}')">删除</button>`:'')+
@@ -6776,6 +6637,67 @@ function saveDaycareRecord(editId,studentId){
     DB.data.daycare[id]={id,studentId,date,arrive,leave,homework,note,createdAt:t,updatedAt:t};
   }
   DB.save(); closeModal(); dcDate=date; renderDaycare(); toast('✓ 已保存托班记录');
+}
+function exportDcPerson(studentId){
+  const s=DB.data.students[studentId];
+  if(!s||s._deleted) return;
+  const rs=allDaycareRecords().filter(r=>r.studentId===studentId).sort((a,b)=>b.date.localeCompare(a.date));
+  if(!rs.length){ toast('该学生暂无托班记录'); return; }
+  toast('正在生成图片...');
+  const hs=hwStat(rs); const hwTotal=hs.done+hs.partial+hs.none;
+  const monthPrefix=todayStr().slice(0,7);
+  const monthDays=rs.filter(r=>r.date.startsWith(monthPrefix)).length;
+  const durs=rs.map(dcDuration).filter(Boolean);
+  const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
+  let html=`<div style="background:#fff;color:#1a1a1a;padding:16px;font-family:system-ui,sans-serif">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <div style="width:44px;height:44px;border-radius:50%;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px">${s.name.charAt(0)}</div>
+      <div><div style="font-size:17px;font-weight:700">${s.name}</div><div style="font-size:11px;color:#666">${s.grade||'—'} · 托班报告</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px">
+      <div style="background:#eff6ff;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#1d4ed8">${rs.length}</div><div style="font-size:9px;color:#666">📅 总天数</div></div>
+      <div style="background:#f0fdf4;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#16a34a">${monthDays}</div><div style="font-size:9px;color:#666">📊 本月</div></div>
+      <div style="background:#fef3c7;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#d97706">${hwTotal?Math.round(hs.done/hwTotal*100)+'%':'—'}</div><div style="font-size:9px;color:#666">📚 完成率</div></div>
+      <div style="background:#f5f3ff;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#7c3aed">${avg?fmtDcDur(avg):'—'}</div><div style="font-size:9px;color:#666">⏱️ 平均时长</div></div>
+    </div>`;
+  const subjStat={};
+  rs.forEach(r=>(r.homework||[]).forEach(h=>{ if(!subjStat[h.s]) subjStat[h.s]={done:0,partial:0,none:0}; if(subjStat[h.s][h.st]!==undefined) subjStat[h.s][h.st]++; }));
+  const subjKeys=Object.keys(subjStat).sort();
+  if(subjKeys.length){
+    html+=`<div style="font-size:13px;font-weight:600;margin-bottom:6px">📚 作业统计</div><table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px">
+      <tr style="background:#f9fafb"><th style="padding:6px;text-align:left">科目</th><th style="padding:6px">✓</th><th style="padding:6px">◐</th><th style="padding:6px">✗</th><th style="padding:6px">完成率</th></tr>
+      ${subjKeys.map(k=>{const v=subjStat[k];const tot=v.done+v.partial+v.none;return `<tr style="border-top:1px solid #e5e7eb"><td style="padding:6px;font-weight:600">${k}</td><td style="padding:6px;text-align:center;color:#16a34a">${v.done}</td><td style="padding:6px;text-align:center;color:#d97706">${v.partial}</td><td style="padding:6px;text-align:center;color:#dc2626">${v.none}</td><td style="padding:6px;text-align:center;font-weight:600">${Math.round(v.done/tot*100)}%</td></tr>`;}).join('')}
+    </table>`;
+  }
+  html+=`<div style="font-size:13px;font-weight:600;margin-bottom:6px">📋 最近记录</div>`;
+  rs.slice(0,10).forEach(r=>{
+    const dur=dcDuration(r);
+    const chips=hwChips(r);
+    html+=`<div style="border:1px solid #e5e7eb;border-radius:10px;padding:9px 11px;margin-bottom:6px">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:12px;font-weight:700">${r.date.slice(5)} 周${DC_WD[dayOfWeek(r.date)]}</span>
+        <span style="margin-left:auto;font-size:10px;color:#666">${r.arrive||'--:--'}~${r.leave||'--:--'}${dur?' · '+fmtDcDur(dur):''}</span>
+      </div>
+      ${chips?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:5px">${chips}</div>`:''}
+      ${r.note?`<div style="font-size:10px;color:#888;margin-top:4px">📝 ${r.note}</div>`:''}
+    </div>`;
+  });
+  if(rs.length>10) html+=`<div style="text-align:center;font-size:9px;color:#bbb">仅显示最近10天，共${rs.length}天</div>`;
+  html+='</div>';
+  const wrap=document.createElement('div');
+  wrap.style.cssText='position:fixed;left:-99999px;top:0;width:420px;background:#fff;z-index:-1';
+  wrap.innerHTML=html;
+  document.body.appendChild(wrap);
+  ensureHtml2Canvas(()=>{
+    html2canvas(wrap,{scale:2,backgroundColor:'#fff'}).then(canvas=>{
+      wrap.remove();
+      canvas.toBlob(blob=>{
+        if(!blob){ toast('导出失败：无法生成图片'); return; }
+        downloadBlob(blob,'托班报告_'+s.name+'_'+todayStr()+'.png');
+        toast('✅ 图片已保存');
+      },'image/png');
+    }).catch(e=>{ wrap.remove(); toast('导出失败：'+e.message); });
+  });
 }
 function delDaycareRecord(id){
   if(!confirm('确定删除这条托班记录？')) return;
@@ -8252,7 +8174,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v48';
+    const sw=`const C='tw-cache-v49';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
