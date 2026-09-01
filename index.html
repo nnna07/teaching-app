@@ -527,7 +527,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
     </div>
     <div class="card" style="font-size:11px;color:var(--text3);line-height:1.7">
       <b style="color:var(--text2)">使用说明</b><br>
-      1. 📚教学台：课次/时间表/课程三合一，管理课次，支持1对1/1对2/班课/小组课/体验课/陪练课等<br>
+      1. 📚教学台：课次/时间表/课程三合一，支持1对1/1对2/班课/小组课/体验课/陪练课等；新建课次自动推荐空档时段，保存时自动检测老师/学生时间冲突（可忽略），周视图冲突红框警示<br>
       2. 📍督学打卡：记录来访+学习打卡（背单词/拼写计数，听力/口语开关），个人详情/月历多视图，支持导出<br>
       3. 🏫托班：记录每日到班/离班时间和各科作业完成情况（✓完成/◐部分/✗未做），按小学/初中分组查看，支持个人汇总和图片导出<br>
       4. 📝记录：日/周/月/年四视图，番茄TODO风格可视化<br>
@@ -582,7 +582,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.32.1';
+const APP_VERSION = 'v3.33.0';
 const APP_VERSION_DATE = '2026-09-01';
 
 const $ = s => document.querySelector(s);
@@ -4039,6 +4039,9 @@ function openLessonEdit(id, prefill={}){
     </div>
     <div class="form-row"><label>开始时间 <span class="req">*</span></label><input type="time" class="form-control" id="f-hhmm" value="${l?.hhmm||prefill.hhmm||'09:00'}"></div>
     <div class="form-row"><label>时长(分钟)</label><input type="number" class="form-control" id="f-dur" value="${l?.duration||prefill.duration||60}" min="15" step="15"></div>
+    <div class="form-row"><label>🔍 空档推荐 <span style="font-size:10px;color:var(--text3);font-weight:400">(未来14天，点击填入)</span></label>
+      <div id="f-slots" style="display:flex;flex-wrap:wrap;gap:5px"><span style="font-size:11px;color:var(--text3)">选好老师/学生后自动推荐</span></div>
+    </div>
     <div class="form-row"><label>备注</label><textarea class="form-control" id="f-note">${l?.note||''}</textarea></div>
   `;
   const footer = `<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="saveLesson('${id||''}')">保存</button>`;
@@ -4061,6 +4064,35 @@ function openLessonEdit(id, prefill={}){
   updateModeRows(initialMode);
   if(prefill.date && initialMode==='single'){ $('#f-date').value = prefill.date; }
   if(prefill.date && initialMode==='range'){ $('#f-date-start').value = prefill.date; $('#f-date-end').value = prefill.date; }
+  $('#f-teacher').addEventListener('change',refreshLessonSlots);
+  $('#f-students').addEventListener('change',refreshLessonSlots);
+  $('#f-dur').addEventListener('input',refreshLessonSlots);
+  $('#f-weekday').addEventListener('change',refreshLessonSlots);
+  $('#f-mode').addEventListener('click',e=>{ if(e.target.classList.contains('chip')) setTimeout(refreshLessonSlots,0); });
+  refreshLessonSlots();
+}
+function refreshLessonSlots(){
+  const box=$('#f-slots'); if(!box) return;
+  const mode=$('#f-mode .chip.active')?.dataset.v;
+  if(mode==='range'){ box.innerHTML='<span style="font-size:11px;color:var(--text3)">批量排课请自行选择日期范围</span>'; return; }
+  const teacherId=$('#f-teacher').value;
+  const sids=[...$$('#f-students input:checked')].map(c=>c.dataset.id);
+  if(!teacherId && !sids.length){ box.innerHTML='<span style="font-size:11px;color:var(--text3)">选好老师/学生后自动推荐</span>'; return; }
+  const dur=parseInt($('#f-dur').value)||60;
+  let slots=suggestFreeSlots(teacherId, sids, dur, 14, 12);
+  if(mode==='week'){
+    const wd=$('#f-weekday').value;
+    if(wd!=='all') slots=slots.filter(x=>dayOfWeek(x.date)===parseInt(wd));
+    box.innerHTML=slots.length?slots.slice(0,6).map(x=>`<button class="chip" style="font-size:11px;padding:2px 8px" onclick="applySlot('${x.date}','${x.hhmm}',false)">${x.hhmm}</button>`).join(''):'<span style="font-size:11px;color:var(--text3)">该时段暂无空档</span>';
+  }else{
+    box.innerHTML=slots.length?slots.slice(0,8).map(x=>`<button class="chip" style="font-size:11px;padding:2px 8px" onclick="applySlot('${x.date}','${x.hhmm}',true)">${x.date.slice(5)} ${dayNames[dayOfWeek(x.date)]} ${x.hhmm}</button>`).join(''):'<span style="font-size:11px;color:var(--text3)">未来两周暂无空档</span>';
+  }
+}
+function applySlot(date,hhmm,fillDate){
+  const h=$('#f-hhmm'); if(h) h.value=hhmm;
+  if(fillDate){ const d=$('#f-date'); if(d) d.value=date; }
+  toast('已填入 '+hhmm+(fillDate?('（'+date+'）'):''));
+  refreshLessonSlots();
 }
 function applyCustomType(){
   const v=$('#f-custom-type').value.trim();
@@ -4429,6 +4461,8 @@ function saveLesson(id){
     else { freq=freqVal; }
     const dates=getRangeDates(start,end,freq,weeklyDay);
     if(dates.length===0){toast('所选范围内没有符合条件的日期');return;}
+    const rangeConf=getDraftConflicts({dates,hhmm,duration,teacherId,coTeacherId:$('#f-co-teacher').value,subTeacherId:$('#f-sub-teacher').value,studentIds:selectedStudentIds}, id);
+    if(rangeConf.length && !confirm('⚠️ 检测到 '+rangeConf.length+' 处时间冲突：\n'+rangeConf.slice(0,5).join('\n')+(rangeConf.length>5?'\n…':'')+'\n\n仍要保存吗？')) return;
     const batchId=uid();
     const baseStudentIds=selectedStudentIds;
     const baseMarks=id?(DB.data.lessons[id]?.marks||[]):[];
@@ -4457,6 +4491,8 @@ function saveLesson(id){
     data.date=null;
   }
   else{data.date=$('#f-date').value;data.weekday=dayOfWeek(data.date);}
+  const confMsgs=getDraftConflicts({mode,weekday:data.weekday,date:data.date,hhmm,duration,teacherId,coTeacherId:$('#f-co-teacher').value,subTeacherId:$('#f-sub-teacher').value,studentIds:selectedStudentIds}, id);
+  if(confMsgs.length && !confirm('⚠️ 检测到 '+confMsgs.length+' 处时间冲突：\n'+confMsgs.slice(0,5).join('\n')+(confMsgs.length>5?'\n…':'')+'\n\n仍要保存吗？')) return;
   if(id){
     data.subTeacherId=$('#f-sub-teacher').value;
     data.coTeacherId=$('#f-co-teacher').value;
@@ -4774,6 +4810,126 @@ function doSwapLesson(id1,id2){
   toast(`✅ 已对调: ${l1.title}→${fmtDate(l1.date)}, ${l2.title}→${fmtDate(l2.date)}`);
 }
 
+/* ==================== 冲突检测引擎 ==================== */
+// 课次发生时实际授课老师集合：代课时由代课老师上课，合教老师全程参与
+function occTeacherIds(l){
+  const ids=[];
+  if(l.subTeacherId) ids.push(l.subTeacherId);
+  else if(l.teacherId) ids.push(l.teacherId);
+  if(l.coTeacherId && l.coTeacherId!==l.subTeacherId) ids.push(l.coTeacherId);
+  return ids.filter(Boolean);
+}
+function hhmmToMin(hhmm){ const p=String(hhmm||'00:00').split(':').map(Number); return (p[0]||0)*60+(p[1]||0); }
+function minToHHmm(m){ return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0'); }
+function getLeaveSet(){
+  return new Set(Object.values(DB.data.sessions).filter(s=>!s._deleted&&s.status==='leave').map(s=>s.lessonId+'@'+s.date));
+}
+// 展开课次列表到指定日期的发生实例（跳过请假session）
+function lessonsToOccs(lessons, dates){
+  const leaveSet=getLeaveSet();
+  const occs=[];
+  lessons.forEach(l=>{
+    dates.forEach(ds=>{
+      if(!lessonOccursOn(l,ds)) return;
+      if(leaveSet.has(l.id+'@'+ds)) return;
+      const st=hhmmToMin(l.hhmm);
+      occs.push({lesson:l, date:ds, start:st, end:st+(l.duration||60)});
+    });
+  });
+  return occs;
+}
+// 检测发生实例间老师/学生时间重叠
+function detectOccConflicts(occs){
+  const byDate={};
+  occs.forEach(o=>{ (byDate[o.date] ||= []).push(o); });
+  const res=[];
+  for(const date in byDate){
+    const list=byDate[date].slice().sort((a,b)=>a.start-b.start);
+    for(let i=0;i<list.length;i++){
+      for(let j=i+1;j<list.length;j++){
+        const a=list[i], b=list[j];
+        if(b.start>=a.end) break;
+        const ta=new Set(occTeacherIds(a.lesson));
+        const th=occTeacherIds(b.lesson).find(x=>ta.has(x));
+        if(th) res.push({a,b,type:'teacher',id:th});
+        const sa=new Set(a.lesson.studentIds||[]);
+        const sh=(b.lesson.studentIds||[]).find(x=>sa.has(x));
+        if(sh) res.push({a,b,type:'student',id:sh});
+      }
+    }
+  }
+  return res;
+}
+// 保存前校验草稿课次冲突，返回提示文案数组
+function getDraftConflicts(draft, excludeId){
+  let dateList=[];
+  if(draft.mode==='single' && draft.date) dateList=[draft.date];
+  else if(draft.mode==='week'){
+    for(let i=0;i<28;i++){ const d=new Date(); d.setDate(d.getDate()+i); const ds=fmtDate(d); if(draft.weekday==='all'||dayOfWeek(ds)===draft.weekday) dateList.push(ds); }
+  }
+  else if(draft.dates && draft.dates.length) dateList=draft.dates;
+  if(!dateList.length) return [];
+  const st=hhmmToMin(draft.hhmm), en=st+(draft.duration||60);
+  const dTs=occTeacherIds(draft);
+  const leaveSet=getLeaveSet();
+  const occByDate={};
+  Object.values(DB.data.lessons).forEach(l=>{
+    if(l._deleted || l.id===excludeId) return;
+    dateList.forEach(ds=>{
+      if(!lessonOccursOn(l,ds)) return;
+      if(leaveSet.has(l.id+'@'+ds)) return;
+      const s2=hhmmToMin(l.hhmm), e2=s2+(l.duration||60);
+      (occByDate[ds] ||= []).push({l,s2,e2});
+    });
+  });
+  const msgs=[], seen=new Set();
+  dateList.forEach(ds=>{
+    (occByDate[ds]||[]).forEach(pair=>{
+      const l=pair.l;
+      if(!(st<pair.e2 && en>pair.s2)) return;
+      const lt=occTeacherIds(l);
+      const tid=dTs.find(x=>lt.includes(x));
+      if(tid){ const k=ds+'t'+tid+l.id; if(!seen.has(k)){ seen.add(k); msgs.push('老师「'+(DB.data.teachers[tid]?.name||'?')+'」'+ds+' '+l.hhmm+' 已排「'+l.title+'」'); } }
+      const sid=(draft.studentIds||[]).find(x=>(l.studentIds||[]).includes(x));
+      if(sid){ const k=ds+'s'+sid+l.id; if(!seen.has(k)){ seen.add(k); msgs.push('学生「'+(DB.data.students[sid]?.name||'?')+'」'+ds+' '+l.hhmm+' 已排「'+l.title+'」'); } }
+    });
+  });
+  return msgs;
+}
+// 空档推荐：未来N天内老师+学生都空闲的时段（优先紧邻现有课、放学后黄金时段）
+function suggestFreeSlots(teacherId, studentIds, duration, days, limit){
+  const leaveSet=getLeaveSet();
+  const dates=[];
+  for(let i=0;i<days;i++){ const d=new Date(); d.setDate(d.getDate()+i); dates.push(fmtDate(d)); }
+  const occByDate={};
+  Object.values(DB.data.lessons).forEach(l=>{
+    if(l._deleted) return;
+    const tids=occTeacherIds(l);
+    dates.forEach(ds=>{
+      if(!lessonOccursOn(l,ds)) return;
+      if(leaveSet.has(l.id+'@'+ds)) return;
+      const busy=(teacherId && tids.includes(teacherId)) || (l.studentIds||[]).some(x=>studentIds.includes(x));
+      if(!busy) return;
+      const st=hhmmToMin(l.hhmm);
+      (occByDate[ds] ||= []).push([st, st+(l.duration||60)]);
+    });
+  });
+  const A=8*60, Z=21*60, res=[];
+  dates.forEach((ds,idx)=>{
+    const busy=occByDate[ds]||[];
+    for(let t=A; t+duration<=Z; t+=30){
+      if(busy.some(iv=>t<iv[1] && t+duration>iv[0])) continue;
+      let score=0;
+      if(busy.some(iv=>iv[1]===t || iv[0]===t+duration)) score+=30;
+      if(t>=16*60 && t<=20*60) score+=15;
+      if(busy.length) score+=5;
+      score-=Math.abs(t-16*60)/60;
+      if(idx===0) score-=3;
+      res.push({date:ds, hhmm:minToHHmm(t), score});
+    }
+  });
+  return res.sort((a,b)=>b.score-a.score).slice(0, limit||8);
+}
 /* ==================== 时间表 ==================== */
 let weekOffset=0, monthOffset=0, dayOffset=0;
 let ttView='week';
@@ -4877,9 +5033,22 @@ function renderWeekView(lessons){
     dates.forEach(ds=>{ if(lessonOccursOn(l, ds)) dayMap[ds].push(l); });
   });
   dates.forEach(d=>dayMap[d].sort((a,b)=>a.hhmm.localeCompare(b.hhmm)));
+  // 冲突检测：老师/学生同一时段重叠
+  const conflicts=detectOccConflicts(lessonsToOccs(lessons, dates));
+  const conflictKeys=new Set(conflicts.flatMap(c=>[c.a.lesson.id+'@'+c.a.date, c.b.lesson.id+'@'+c.b.date]));
   const cont=$('#timetable-content');
   const totalLessons = dates.reduce((sum,d)=>sum+dayMap[d].length,0);
   let html='';
+  if(conflicts.length){
+    html+=`<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:#b91c1c;line-height:1.6">
+      <b>⚠️ 本周时间冲突 ${conflicts.length} 处</b>
+      ${conflicts.slice(0,3).map(c=>{
+        const who=c.type==='teacher'?(DB.data.teachers[c.id]?.name||'老师'):(DB.data.students[c.id]?.name||'学生');
+        return `<div style="margin-top:2px">${c.a.date.slice(5)} ${who}：「${c.a.lesson.title}」${c.a.lesson.hhmm} 与「${c.b.lesson.title}」${c.b.lesson.hhmm}</div>`;
+      }).join('')}
+      <div style="margin-top:2px">${conflicts.length>3?('还有 '+(conflicts.length-3)+' 处，'):''}冲突课次已用红框标出</div>
+    </div>`;
+  }
   if(totalLessons===0){ html+=`<div style="text-align:center;padding:12px;color:var(--text3);font-size:12px;margin-bottom:6px">本周暂无排课，点击下方 + 新建</div>`; }
   dates.forEach(ds=>{
     const wd=dayOfWeek(ds); const isToday=ds===todayStr();
@@ -4893,10 +5062,11 @@ function renderWeekView(lessons){
         const stus=l.studentIds.map(id=>DB.data.students[id]?.name).filter(Boolean).join('、');
         const endTime=fmtTime(new Date(`${ds}T${l.hhmm}:00`).getTime()+l.duration*60000);
         const color=lessonColor(l);
-        html+=`<div class="tl-item" style="border-left-color:${color}" onclick="openLessonDetail('${l.id}','${ds}')">
-          <div class="tl-dot" style="background:${color}"></div>
-          <div class="tl-time" style="color:${color}">${l.hhmm} - ${endTime}</div>
-          <div class="tl-title">${l.title} <span style="font-size:10px;color:var(--text3)">[${courseTypeLabel(l.type)}]</span></div>
+        const isConf=conflictKeys.has(l.id+'@'+ds);
+        html+=`<div class="tl-item" style="border-left-color:${isConf?'#dc2626':color};${isConf?'box-shadow:inset 0 0 0 1.5px #fecaca;background:#fff5f5;':''}" onclick="openLessonDetail('${l.id}','${ds}')">
+          <div class="tl-dot" style="background:${isConf?'#dc2626':color}"></div>
+          <div class="tl-time" style="color:${isConf?'#dc2626':color}">${l.hhmm} - ${endTime}</div>
+          <div class="tl-title">${isConf?'<span style="color:#dc2626">⚠️</span> ':''}${l.title} <span style="font-size:10px;color:var(--text3)">[${courseTypeLabel(l.type)}]</span></div>
           <div class="tl-sub">${ttModeFilter==='mine'?'':'👤 '+lessonTeacherDisplay(l,{short:true})+' · '}${stus?'🎓 '+stus:''}</div>
           ${lessonActions(l, ds)}
         </div>`;
@@ -8082,7 +8252,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v47';
+    const sw=`const C='tw-cache-v48';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
