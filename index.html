@@ -461,6 +461,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
     <div class="card-h"><h3>🏫 托班记录</h3><div style="font-size:11px;color:var(--text3)">到离班时间 + 各科作业完成情况</div></div>
     <div class="view-switch" id="dc-view-switch" style="margin-bottom:8px">
       <button data-dcv="day" class="active" onclick="setDcView('day')">📋 当日</button>
+      <button data-dcv="sum" onclick="setDcView('sum')">📊 汇总</button>
       <button data-dcv="people" onclick="setDcView('people')">👤 个人</button>
     </div>
     <div id="dc-nav-box"></div>
@@ -577,8 +578,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.35.0';
-const APP_VERSION_DATE = '2026-09-02';
+const APP_VERSION = 'v3.36.0';
+const APP_VERSION_DATE = '2026-10-28';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -2091,25 +2092,6 @@ function setSvCkFilter(c){ svCkFilter=c; renderSupervisions(); }
 function shiftSvMonth(d){ svMonthOffset+=d; renderSupervisions(); }
 function goSvThisMonth(){ svMonthOffset=0; renderSupervisions(); }
 
-// 获取某一周的7天日期（offset=0本周, -1上周, 1下周）
-function getWeekDates(offset){
-  const today=new Date();
-  const curDay=today.getDay();
-  const mondayDiff=curDay===0?-6:1-curDay;
-  const monday=new Date(today);
-  monday.setDate(today.getDate()+mondayDiff+offset*7);
-  const dates=[];
-  for(let i=0;i<7;i++){
-    const d=new Date(monday);
-    d.setDate(monday.getDate()+i);
-    dates.push({date:fmtDate(d), wd:i, isToday:fmtDate(d)===todayStr()});
-  }
-  const first=dates[0].date, last=dates[6].date;
-  const monthLabel = first.slice(0,7)===last.slice(0,7)
-    ? `${parseInt(first.slice(5))}月${first.slice(8)}日~${parseInt(last.slice(5))}月${last.slice(8)}日`
-    : `${parseInt(first.slice(5))}月${first.slice(8)}日~${parseInt(last.slice(5))}月${last.slice(8)}日`;
-  return {dates, monthLabel};
-}
 
 // 将一条督学记录按打卡类型拆分成多个"科目+打卡类型"名称
 // 如 subject=英语, vocab>0, speaking=true → ['英语单词','英语口语']
@@ -6337,8 +6319,7 @@ function doExportParentReport(el){
 /* ==================== 家长周报（本周上课+打卡+托班） ==================== */
 function openParentWeekly(studentId){
   const s=DB.data.students[studentId]; if(!s||s._deleted) return;
-  const wk=getWeekDates(0);
-  const weekSet=new Set(wk.dates.map(x=>x.date));
+  const weekSet=new Set(getWeekDates(0));
   const inWeek=d=>weekSet.has(d);
   // 本周上课
   const sessions=Object.values(DB.data.sessions).filter(ss=>!ss._deleted && ss.studentIds.includes(studentId) && inWeek(ss.date||'') && ss.status!=='planned').sort((a,b)=>(a.date||'').localeCompare(b.date||''));
@@ -6462,12 +6443,14 @@ function getSessionMinutesByDate(){
 let dcView='day';
 let dcDate='';
 let dcPersonId='';
+let dcFilter='all';
+let dcSumRange='week';
 const DC_STATUS=[{k:'done',t:'✓ 完成',c:'#16a34a',bg:'#dcfce7'},{k:'partial',t:'◐ 部分',c:'#d97706',bg:'#fef3c7'},{k:'none',t:'✗ 未做',c:'#dc2626',bg:'#fee2e2'}];
 const DC_SUBJECTS_DEFAULT=['语文','数学','英语','科学'];
 const DC_GROUPS=['小学','初中','高中','其他'];
 const DC_WD=['日','一','二','三','四','五','六'];
 function dcStatus(k){ return DC_STATUS.find(s=>s.k===k); }
-function setDcView(v){ dcView=v; dcPersonId=''; document.querySelectorAll('#dc-view-switch button').forEach(b=>b.classList.toggle('active',b.dataset.dcv===v)); renderDaycare(); }
+function setDcView(v){ dcView=v; dcPersonId=''; dcFilter='all'; document.querySelectorAll('#dc-view-switch button').forEach(b=>b.classList.toggle('active',b.dataset.dcv===v)); renderDaycare(); }
 function shiftDcDate(d){ const x=new Date(dcDate+'T00:00:00'); x.setDate(x.getDate()+d); dcDate=fmtDate(x); renderDaycare(); }
 function goDcToday(){ dcDate=todayStr(); renderDaycare(); }
 function backDcPeople(){ dcPersonId=''; renderDaycare(); }
@@ -6527,56 +6510,194 @@ function hwChips(rec){
 function renderDaycare(){
   if(!dcDate) dcDate=todayStr();
   if(dcView==='day') renderDcDay();
+  else if(dcView==='sum') renderDcSum();
   else if(dcPersonId) renderDcPerson(dcPersonId);
   else renderDcPeople();
 }
+function setDcFilter(f){ dcFilter=f; renderDaycare(); }
+function setDcSumRange(r){ dcSumRange=r; renderDaycare(); }
+/* ---- 作业统计核心 ---- */
+function dcSubjectStat(recs){
+  const map={};
+  recs.forEach(r=>(r.homework||[]).forEach(h=>{
+    if(!h.s) return;
+    if(!map[h.s]) map[h.s]={done:0,partial:0,none:0,total:0};
+    if(map[h.s][h.st]!==undefined){ map[h.s][h.st]++; map[h.s].total++; }
+  }));
+  return map;
+}
+function dcRateOf(v){ return v&&v.total?Math.round(v.done/v.total*100):0; }
+function dcRateColor(p){ return p>=80?'#16a34a':(p>=50?'#d97706':'#dc2626'); }
+/* 作业看板：按科目横排，含三段进度条 */
+function dcHwBoardHtml(recs){
+  const st=dcSubjectStat(recs);
+  const keys=Object.keys(st).filter(k=>st[k].total>0).sort((a,b)=>st[b].total-st[a].total);
+  if(!keys.length) return '';
+  let grand={done:0,partial:0,none:0,total:0};
+  keys.forEach(k=>{ grand.done+=st[k].done; grand.partial+=st[k].partial; grand.none+=st[k].none; grand.total+=st[k].total; });
+  let h='<div class="card" style="padding:12px;margin-bottom:10px">'
+    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:9px">'
+    +'<span style="font-size:13px;font-weight:700">📚 作业看板</span>'
+    +'<span style="margin-left:auto;font-size:11px;color:var(--text3)">'+keys.length+' 科 · '+grand.total+' 项</span></div>';
+  keys.forEach(k=>{
+    const v=st[k]; const pct=dcRateOf(v);
+    h+='<div style="margin-bottom:9px">'
+      +'<div style="display:flex;align-items:center;gap:6px;font-size:11px;line-height:14px">'
+      +'<span style="font-weight:600;min-width:42px">'+k+'</span>'
+      +'<span style="color:#16a34a">✓'+v.done+'</span>'
+      +'<span style="color:#d97706">◐'+v.partial+'</span>'
+      +'<span style="color:#dc2626">✗'+v.none+'</span>'
+      +'<span style="margin-left:auto;font-weight:700;color:'+dcRateColor(pct)+'">'+pct+'%</span></div>'
+      +'<div style="height:5px;background:#eef0f3;border-radius:3px;margin-top:3px;overflow:hidden;display:flex">'
+      +'<div style="width:'+(v.done/v.total*100)+'%;background:#22c55e"></div>'
+      +'<div style="width:'+(v.partial/v.total*100)+'%;background:#f59e0b"></div>'
+      +'<div style="width:'+(v.none/v.total*100)+'%;background:#ef4444"></div></div></div>';
+  });
+  h+='<div style="display:flex;align-items:center;gap:6px;font-size:11px;line-height:14px;border-top:1px dashed var(--border);padding-top:7px;margin-top:2px">'
+    +'<span style="font-weight:700">合计</span>'
+    +'<span style="color:#16a34a">✓'+grand.done+'</span>'
+    +'<span style="color:#d97706">◐'+grand.partial+'</span>'
+    +'<span style="color:#dc2626">✗'+grand.none+'</span>'
+    +'<span style="margin-left:auto;font-weight:700;color:'+dcRateColor(dcRateOf(grand))+'">'+dcRateOf(grand)+'%</span></div>';
+  return h+'</div>';
+}
+/* 单科 chip：点击循环 完成→部分→未做→清除 */
+function dcChipHtml(r,subj){
+  const h=(r.homework||[]).find(x=>x.s===subj);
+  const st=dcStatus(h&&h.st);
+  if(!st) return '<span class="dc-chip" onclick="cycleDcHw(event,\''+r.id+'\',\''+subj+'\')" style="background:#f3f4f6;color:#9ca3af;border-radius:8px;padding:3px 8px;font-size:10px">'+subj+'</span>';
+  return '<span class="dc-chip" onclick="cycleDcHw(event,\''+r.id+'\',\''+subj+'\')" style="background:'+st.bg+';color:'+st.c+';border-radius:8px;padding:3px 8px;font-size:10px;font-weight:600">'+subj+' '+st.t.slice(0,1)+(h.note?'·'+h.note:'')+'</span>';
+}
+function cycleDcHw(ev,recId,subj){
+  ev.stopPropagation();
+  const r=DB.data.daycare[recId]; if(!r||r._deleted) return;
+  r.homework=r.homework||[];
+  const cur=r.homework.find(x=>x.s===subj);
+  const order=['done','partial','none'];
+  if(!cur){ r.homework.push({s:subj,st:'done',note:''}); }
+  else {
+    const i=order.indexOf(cur.st);
+    if(i<0 || i===order.length-1){ r.homework=r.homework.filter(x=>x.s!==subj); }
+    else cur.st=order[i+1];
+  }
+  r.updatedAt=now(); DB.save();
+  const y=window.scrollY; renderDaycare(); window.scrollTo(0,y);
+}
+function addDcHwInline(ev,recId){
+  ev.stopPropagation();
+  const r=DB.data.daycare[recId]; if(!r) return;
+  const nm=(prompt('科目名称（如：道法、物理、地理）')||'').trim();
+  if(!nm) return;
+  r.homework=r.homework||[];
+  if(r.homework.some(x=>x.s===nm)){ toast('该科目已存在'); return; }
+  r.homework.push({s:nm,st:'done',note:''});
+  r.updatedAt=now(); DB.save();
+  const y=window.scrollY; renderDaycare(); window.scrollTo(0,y);
+}
+/* 当日统计卡 */
+function dcStatsHtml(recs){
+  const left=recs.filter(r=>r.leave).length;
+  const inCare=recs.length-left;
+  const hs=hwStat(recs); const tot=hs.done+hs.partial+hs.none;
+  const pct=tot?Math.round(hs.done/tot*100):0;
+  const noHw=recs.filter(r=>!(r.homework||[]).length).length;
+  const durs=recs.map(dcDuration).filter(Boolean);
+  const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
+  return '<div class="stat-card"><div class="s-num">'+recs.length+'</div><div class="s-lbl">👥 托班人数</div><div style="font-size:9px;color:var(--text3);margin-top:1px">已离'+left+' · 在托'+inCare+'</div></div>'
+    +'<div class="stat-card"><div class="s-num" style="color:'+(tot?dcRateColor(pct):'var(--text3)')+'">'+(tot?pct+'%':'—')+'</div><div class="s-lbl">📚 作业完成率</div><div style="font-size:9px;color:var(--text3);margin-top:1px">✓'+hs.done+' ◐'+hs.partial+' ✗'+hs.none+'</div></div>'
+    +'<div class="stat-card"><div class="s-num" style="color:'+(noHw?'#d97706':'var(--primary)')+'">'+(recs.length-noHw)+'/'+recs.length+'</div><div class="s-lbl">✍️ 已记作业</div><div style="font-size:9px;color:var(--text3);margin-top:1px">'+(noHw?'未记 '+noHw+' 人':'全部已记')+'</div></div>'
+    +'<div class="stat-card"><div class="s-num" style="font-size:15px;line-height:26px">'+fmtDcDur(avg)+'</div><div class="s-lbl">⏱️ 平均托管时长</div><div style="font-size:9px;color:var(--text3);margin-top:1px">'+durs.length+' 人有时长</div></div>';
+}
+/* 学生卡片：作业科目行 */
+function dcChipsRow(r,stu){
+  const recorded=(r.homework||[]).map(h=>h.s);
+  const all=dcHwSubjects(stu?stu.id:'');
+  const list=[...new Set([...recorded,...all])].slice(0,8);
+  return '<div id="dc-chips-'+r.id+'" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px">'
+    +list.map(sub=>dcChipHtml(r,sub)).join('')
+    +'<span onclick="addDcHwInline(event,\''+r.id+'\')" style="background:#f3f4f6;color:var(--text3);border-radius:8px;padding:3px 8px;font-size:10px">＋</span></div>';
+}
+function dcCardHtml(s,r){
+  const dur=dcDuration(r);
+  const hs=hwStat([r]); const tot=hs.done+hs.partial+hs.none;
+  const warn=hs.none>0 ? '#dc2626' : (hs.partial>0 ? '#d97706' : '');
+  return '<div class="card" style="padding:10px 12px;margin-bottom:6px'+(warn?';border-left:3px solid '+warn:'')+'" onclick="openDcEdit(\''+s.id+'\',\''+r.id+'\')">'
+    +'<div style="display:flex;align-items:center;gap:6px">'
+    +'<span style="font-weight:600;font-size:14px">'+s.name+'</span>'+gradeTag(s.grade)
+    +(tot&&hs.none?'<span style="background:#fee2e2;color:#dc2626;border-radius:8px;padding:1px 6px;font-size:10px;font-weight:600">✗'+hs.none+'</span>':'')
+    +(tot&&!hs.none&&hs.partial?'<span style="background:#fef3c7;color:#d97706;border-radius:8px;padding:1px 6px;font-size:10px;font-weight:600">◐'+hs.partial+'</span>':'')
+    +(!tot?'<span style="background:#f3f4f6;color:#9ca3af;border-radius:8px;padding:1px 6px;font-size:10px">未记作业</span>':'')
+    +'<span style="margin-left:auto;font-size:11px;color:var(--text2);white-space:nowrap">'+(r.arrive||'--:--')+'~'+(r.leave||'--:--')+(dur?' · '+fmtDcDur(dur):'')+'</span></div>'
+    +dcChipsRow(r,s)
+    +(r.note?'<div style="font-size:11px;color:var(--text3);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📝 '+r.note+'</div>':'')
+    +'</div>';
+}
 function renderDcDay(){
   const isToday=dcDate===todayStr();
-  $('#dc-nav-box').innerHTML=`<div style="display:flex;gap:5px;margin-bottom:8px;align-items:center">
-    <button class="btn btn-sm btn-ghost" onclick="shiftDcDate(-1)">‹ 前一天</button>
-    <button class="btn btn-sm ${isToday?'btn-primary':'btn-ghost'}" style="flex:1;font-size:12px" onclick="goDcToday()">${+dcDate.slice(5,7)}月${+dcDate.slice(8)}日 周${DC_WD[dayOfWeek(dcDate)]}${isToday?' · 今天':''}</button>
-    <button class="btn btn-sm btn-ghost" onclick="shiftDcDate(1)">后一天 ›</button>
-  </div>
-  <div style="display:flex;gap:6px;margin-bottom:8px">
-    <button class="btn btn-primary" style="flex:1;font-size:12px;padding:8px" onclick="openDcQuick()">+ 批量到班</button>
-    <button class="btn btn-ghost" style="font-size:12px;padding:8px" onclick="batchDcLeave()">🚪 批量离班</button>
-    <button class="btn btn-ghost" style="font-size:12px;padding:8px" onclick="exportDcDay()">📤 导出</button>
-  </div>`;
+  $('#dc-nav-box').innerHTML='<div style="display:flex;gap:5px;margin-bottom:8px;align-items:center">'
+    +'<button class="btn btn-sm btn-ghost" onclick="shiftDcDate(-1)">‹ 前一天</button>'
+    +'<button class="btn btn-sm '+(isToday?'btn-primary':'btn-ghost')+'" style="flex:1;font-size:12px" onclick="goDcToday()">'+(+dcDate.slice(5,7))+'月'+(+dcDate.slice(8))+'日 周'+DC_WD[dayOfWeek(dcDate)]+(isToday?' · 今天':'')+'</button>'
+    +'<button class="btn btn-sm btn-ghost" onclick="shiftDcDate(1)">后一天 ›</button></div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:8px">'
+    +'<button class="btn btn-primary" style="flex:1;font-size:12px;padding:8px" onclick="openDcQuick()">+ 批量到班</button>'
+    +'<button class="btn btn-ghost" style="font-size:12px;padding:8px" onclick="batchDcLeave()">🚪 批量离班</button>'
+    +'<button class="btn btn-ghost" style="font-size:12px;padding:8px" onclick="exportDcDay()">📤 导出</button></div>';
   const students=Object.values(DB.data.students).filter(s=>!s._deleted);
   const recs=getDaycareRecords(dcDate);
   const recMap={}; recs.forEach(r=>recMap[r.studentId]=r);
-  const hs=hwStat(recs); const hwTotal=hs.done+hs.partial+hs.none;
-  const durs=recs.map(dcDuration).filter(Boolean);
-  const avgDur=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
-  $('#daycare-stats').innerHTML=`<div class="stat-card"><div class="s-num">${recs.length}</div><div class="s-lbl">今日托班人数</div></div>
-    <div class="stat-card"><div class="s-num">${hwTotal?Math.round(hs.done/hwTotal*100)+'%':'—'}</div><div class="s-lbl">作业完成率</div></div>
-    <div class="stat-card"><div class="s-num" style="font-size:15px;line-height:26px">✓${hs.done} ◐${hs.partial} ✗${hs.none}</div><div class="s-lbl">完成/部分/未做</div></div>
-    <div class="stat-card"><div class="s-num" style="font-size:15px;line-height:26px">${fmtDcDur(avgDur)}</div><div class="s-lbl">平均托管时长</div></div>`;
-  let html='';
-  const groups={};
-  students.forEach(s=>{ const g=gradeGroup(s.grade); if(!groups[g]) groups[g]=[]; groups[g].push(s); });
-  DC_GROUPS.forEach(g=>{
-    const list=groups[g]; if(!list||!list.length) return;
-    const recorded=list.filter(s=>recMap[s.id]); const un=list.filter(s=>!recMap[s.id]);
-    html+=`<div class="card-h" style="margin:6px 0 8px"><h3>${g==='小学'?'🎒':g==='初中'?'📘':'📕'} ${g}${recorded.length?`<span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:6px">${recorded.length}/${list.length} 已记录</span>`:''}</h3></div>`;
-    recorded.forEach(s=>{ const r=recMap[s.id]; const dur=dcDuration(r);
-      html+=`<div class="card" style="padding:10px 12px;margin-bottom:6px" onclick="openDcEdit('${s.id}','${r.id}')">
-        <div style="display:flex;align-items:center;gap:6px">
-          <span style="font-weight:600;font-size:14px">${s.name}</span>${gradeTag(s.grade)}
-          <span style="margin-left:auto;font-size:11px;color:var(--text2)">${r.arrive||'--:--'} ~ ${r.leave||'--:--'}${dur?' · '+fmtDcDur(dur):''}</span>
-        </div>
-        ${hwChips(r)?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:5px">${hwChips(r)}</div>`:''}
-        ${r.note?`<div style="font-size:11px;color:var(--text3);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📝 ${r.note}</div>`:''}
-      </div>`;
-    });
-    if(un.length){
-      html+=`<button class="btn btn-ghost" style="width:100%;font-size:11px;padding:6px;margin-bottom:6px;color:var(--text3)" onclick="toggleDcUn()">${dcUnShown?'▾ 收起':'▸ 展开'}未记录学生（${un.length}）</button>`;
-      if(dcUnShown){
-        html+=`<div style="display:grid;grid-template-columns:repeat(${Math.min(4,un.length)},1fr);gap:6px;margin-bottom:6px">`+un.map(s=>`<button class="btn btn-ghost" style="font-size:12px;padding:10px 4px;display:flex;flex-direction:column;gap:2px" onclick="openDcEdit('${s.id}')"><span style="font-weight:600">${s.name}</span><span style="font-size:10px;color:var(--text3)">${s.grade||'未分年级'}</span></button>`).join('')+`</div>`;
-      }
+  const stuMap={}; students.forEach(s=>stuMap[s.id]=s);
+  $('#daycare-stats').innerHTML=dcStatsHtml(recs);
+
+  const fFollow=recs.filter(r=>(r.homework||[]).some(h=>h.st==='none'||h.st==='partial'));
+  const fInCare=recs.filter(r=>!r.leave);
+  const fNoHw=recs.filter(r=>!(r.homework||[]).length);
+  const fAbsent=students.filter(s=>!recMap[s.id]);
+
+  let html='<div id="dc-hw-board">'+dcHwBoardHtml(recs)+'</div>';
+
+  const chips=[['all','全部',recs.length],['follow','⚠️ 待跟进',fFollow.length],['inCare','🕐 在托',fInCare.length],['noHw','➖ 未记作业',fNoHw.length],['absent','❓ 未到班',fAbsent.length]];
+  html+='<div class="filter-bar" style="margin-bottom:4px">'+chips.map(c=>{
+    const act=dcFilter===c[0];
+    return '<button class="chip" style="white-space:nowrap;'+(act?'background:var(--primary);color:#fff;border-color:var(--primary)':'')+'" onclick="setDcFilter(\''+c[0]+'\')">'+c[1]+' '+c[2]+'</button>';
+  }).join('')+'</div>';
+
+  if(!students.length){
+    html+='<div class="card" style="text-align:center;color:var(--text3);font-size:12px;padding:24px">暂无学生，请先在「我的」页面添加</div>';
+  } else if(dcFilter==='follow'){
+    html+='<div class="card-h" style="margin:4px 0 8px"><h3>⚠️ 作业待跟进（'+fFollow.length+'）</h3><span style="font-size:11px;color:var(--text3)">点科目可快速改状态</span></div>';
+    html+=fFollow.length?fFollow.map(r=>dcCardHtml(stuMap[r.studentId]||{id:r.studentId,name:'(已删除)',grade:''},r)).join('')
+      :'<div class="card" style="text-align:center;color:#16a34a;font-size:12px;padding:20px">✓ 所有人作业都完成了</div>';
+  } else if(dcFilter==='inCare'){
+    html+='<div class="card-h" style="margin:4px 0 8px"><h3>🕐 尚在托管（'+fInCare.length+'）</h3></div>';
+    html+=fInCare.length?fInCare.map(r=>dcCardHtml(stuMap[r.studentId]||{id:r.studentId,name:'(已删除)',grade:''},r)).join('')
+      :'<div class="card" style="text-align:center;color:#16a34a;font-size:12px;padding:20px">✓ 全部已离班</div>';
+  } else if(dcFilter==='noHw'){
+    html+='<div class="card-h" style="margin:4px 0 8px"><h3>➖ 未记作业（'+fNoHw.length+'）</h3><span style="font-size:11px;color:var(--text3)">点科目直接标记</span></div>';
+    html+=fNoHw.length?fNoHw.map(r=>dcCardHtml(stuMap[r.studentId]||{id:r.studentId,name:'(已删除)',grade:''},r)).join('')
+      :'<div class="card" style="text-align:center;color:#16a34a;font-size:12px;padding:20px">✓ 每人都记了作业</div>';
+  } else if(dcFilter==='absent'){
+    html+='<div class="card-h" style="margin:4px 0 8px"><h3>❓ 未到班（'+fAbsent.length+'）</h3><span style="font-size:11px;color:var(--text3)">点名字直接补记</span></div>';
+    if(fAbsent.length){
+      html+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">'+fAbsent.map(s=>'<button class="btn btn-ghost" style="font-size:12px;padding:10px 4px;display:flex;flex-direction:column;gap:2px" onclick="openDcEdit(\''+s.id+'\')"><span style="font-weight:600">'+s.name+'</span><span style="font-size:10px;color:var(--text3)">'+(s.grade||'未分年级')+'</span></button>').join('')+'</div>';
+    } else {
+      html+='<div class="card" style="text-align:center;color:#16a34a;font-size:12px;padding:20px">✓ 所有学生都到班了</div>';
     }
-  });
-  if(!students.length) html=`<div class="card" style="text-align:center;color:var(--text3);font-size:12px;padding:24px">暂无学生，请先在「我的」页面添加</div>`;
+  } else {
+    const groups={};
+    students.forEach(s=>{ const g=gradeGroup(s.grade); if(!groups[g]) groups[g]=[]; groups[g].push(s); });
+    DC_GROUPS.forEach(g=>{
+      const list=groups[g]; if(!list||!list.length) return;
+      const recorded=list.filter(s=>recMap[s.id]); const un=list.filter(s=>!recMap[s.id]);
+      html+='<div class="card-h" style="margin:6px 0 8px"><h3>'+(g==='小学'?'🎒':g==='初中'?'📘':'📕')+' '+g+(recorded.length?'<span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:6px">'+recorded.length+'/'+list.length+' 已记录</span>':'')+'</h3></div>';
+      recorded.forEach(s=>{ html+=dcCardHtml(s,recMap[s.id]); });
+      if(un.length){
+        html+='<button class="btn btn-ghost" style="width:100%;font-size:11px;padding:6px;margin-bottom:6px;color:var(--text3)" onclick="toggleDcUn()">'+(dcUnShown?'▾ 收起':'▸ 展开')+'未记录学生（'+un.length+'）</button>';
+        if(dcUnShown){
+          html+='<div style="display:grid;grid-template-columns:repeat('+Math.min(4,un.length)+',1fr);gap:6px;margin-bottom:6px">'+un.map(s=>'<button class="btn btn-ghost" style="font-size:12px;padding:10px 4px;display:flex;flex-direction:column;gap:2px" onclick="openDcEdit(\''+s.id+'\')"><span style="font-weight:600">'+s.name+'</span><span style="font-size:10px;color:var(--text3)">'+(s.grade||'未分年级')+'</span></button>').join('')+'</div>';
+        }
+      }
+    });
+  }
   $('#daycare-content').innerHTML=html;
 }
 function renderDcPeople(){
@@ -6782,6 +6903,11 @@ function openDcEdit(studentId,editId){
   const r=(editId&&DB.data.daycare[editId])?DB.data.daycare[editId]:null;
   const date=r?r.date:dcDate;
   const hwMap={}; ((r&&r.homework)||[]).forEach(h=>hwMap[h.s]=h);
+  const allSubs=dcHwSubjects(studentId);
+  const onSubs=allSubs.filter(x=>hwMap[x]&&hwMap[x].st);
+  const offSubs=allSubs.filter(x=>!(hwMap[x]&&hwMap[x].st));
+  const headSubs=onSubs.concat(offSubs.slice(0,4));
+  const moreSubs=offSubs.slice(4);
   let html=`<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
     <span style="font-weight:700;font-size:16px">${s.name}</span>${gradeTag(s.grade)}
     <span style="margin-left:auto;font-size:11px;color:var(--text3)">${r?'点击科目状态可切换/取消':''}</span>
@@ -6792,7 +6918,8 @@ function openDcEdit(studentId,editId){
     <div style="flex:1"><label>离班</label><input type="time" class="form-control" id="dc-leave" value="${(r&&r.leave)||''}"></div>
   </div></div>
   <div style="font-size:12px;font-weight:600;color:var(--text2);margin:4px 0">📚 作业完成情况</div>
-  <div id="dc-hw-list">${dcHwSubjects(studentId).map(subj=>dcHwRow(subj,hwMap[subj])).join('')}</div>
+  <div id="dc-hw-list">${headSubs.map(subj=>dcHwRow(subj,hwMap[subj])).join('')}${moreSubs.length?`<div id="dc-hw-more" style="display:none">${moreSubs.map(subj=>dcHwRow(subj,hwMap[subj])).join('')}</div>`:''}</div>
+  ${moreSubs.length?`<button class="btn btn-sm btn-ghost" style="margin-top:6px;font-size:11px;color:var(--text3)" onclick="toggleDcMore(this)">▸ 展开更多科目（${moreSubs.length}）</button>`:''}
   <button class="btn btn-sm btn-ghost" style="margin-top:6px" onclick="addDcHwRow()">＋ 添加科目</button>
   ${!r?`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);margin:6px 0 2px"><input type="checkbox" id="dc-sv" checked style="width:auto">📍 同时记录督学来访${svSubjectFor(studentId)?`（${svSubjectFor(studentId)}）`:''}</label>`:''}
   <div class="form-row" style="margin-top:8px"><label>备注</label><textarea class="form-control" id="dc-note" rows="2" placeholder="今天的表现/特殊情况...">${(r&&r.note)||''}</textarea></div>`;
@@ -6906,6 +7033,28 @@ function exportDcDay(){
       <span style="background:#fef3c7;color:#d97706;border-radius:8px;padding:3px 8px;font-size:11px">◐部分 ${hs.partial}</span>
       <span style="background:#fee2e2;color:#dc2626;border-radius:8px;padding:3px 8px;font-size:11px">✗未做 ${hs.none}</span>
     </div>`;
+    const _st=dcSubjectStat(recs);
+    const _keys=Object.keys(_st).filter(k=>_st[k].total>0).sort((a,b)=>_st[b].total-_st[a].total);
+    if(_keys.length){
+      html+=`<div style="margin-bottom:10px"><div style="font-size:12px;font-weight:600;margin-bottom:6px">📚 作业看板</div>`;
+      _keys.forEach(k=>{
+        const v=_st[k]; const p=dcRateOf(v);
+        html+=`<div style="margin-bottom:7px">
+          <div style="display:flex;align-items:center;gap:6px;font-size:10px;line-height:13px">
+            <span style="font-weight:600;min-width:38px">${k}</span>
+            <span style="color:#16a34a">✓${v.done}</span>
+            <span style="color:#d97706">◐${v.partial}</span>
+            <span style="color:#dc2626">✗${v.none}</span>
+            <span style="margin-left:auto;font-weight:700;color:${dcRateColor(p)}">${p}%</span>
+          </div>
+          <div style="height:4px;background:#eef0f3;border-radius:2px;margin-top:2px;overflow:hidden;display:flex">
+            <div style="width:${v.done/v.total*100}%;background:#22c55e"></div>
+            <div style="width:${v.partial/v.total*100}%;background:#f59e0b"></div>
+            <div style="width:${v.none/v.total*100}%;background:#ef4444"></div>
+          </div></div>`;
+      });
+      html+=`</div>`;
+    }
     recs.slice().sort((a,b)=>(a.arrive||'').localeCompare(b.arrive||'')).forEach(r=>{
       const stu=DB.data.students[r.studentId];
       const dur=dcDuration(r);
@@ -6936,6 +7085,177 @@ function exportDcDay(){
       },'image/png');
     }).catch(e=>{ wrap.remove(); toast('导出失败：'+e.message); });
   });
+}
+
+/* ==================== 托班汇总视图 ==================== */
+function dcMonthDateList(off){
+  return getMonthDates(off).dates.filter(d=>!d.other).map(d=>d.date);
+}
+function dcRangeRecs(mode){
+  const all=allDaycareRecords();
+  if(mode==='all') return all;
+  let dates=[];
+  if(mode==='week') dates=getWeekDates(0);
+  else if(mode==='month') dates=dcMonthDateList(0);
+  else if(mode==='lastMonth') dates=dcMonthDateList(-1);
+  return all.filter(r=>dates.indexOf(r.date)>=0);
+}
+function dcRangeLabel(mode){
+  if(mode==='week'){ const w=getWeekDates(0); return w[0].slice(5)+' ~ '+w[6].slice(5); }
+  if(mode==='month') return getMonthDates(0).monthLabel;
+  if(mode==='lastMonth') return getMonthDates(-1).monthLabel;
+  return '全部记录';
+}
+function dcStuRows(recs){
+  const byStu={};
+  recs.forEach(r=>{ if(!byStu[r.studentId]) byStu[r.studentId]=[]; byStu[r.studentId].push(r); });
+  return Object.keys(byStu).map(sid=>{
+    const rs=byStu[sid]; const h=hwStat(rs); const t=h.done+h.partial+h.none;
+    const durs=rs.map(dcDuration).filter(Boolean);
+    return {sid,days:rs.length,done:h.done,partial:h.partial,none:h.none,total:t,
+      pct:t?Math.round(h.done/t*100):-1,
+      avg:durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0};
+  }).sort((a,b)=>(a.pct<0?101:a.pct)-(b.pct<0?101:b.pct));
+}
+function renderDcSum(){
+  $('#dc-nav-box').innerHTML='<div class="filter-bar" style="margin-bottom:4px">'
+    +[['week','本周'],['month','本月'],['lastMonth','上月'],['all','全部']].map(x=>{
+      const act=dcSumRange===x[0];
+      return '<button class="chip" style="white-space:nowrap;'+(act?'background:var(--primary);color:#fff;border-color:var(--primary)':'')+'" onclick="setDcSumRange(\''+x[0]+'\')">'+x[1]+'</button>';
+    }).join('')
+    +'<button class="chip" style="white-space:nowrap" onclick="exportDcSum()">\U0001f4e4 导出</button></div>'
+    +'<div style="font-size:11px;color:var(--text3);margin-bottom:6px;padding-left:2px">'+dcRangeLabel(dcSumRange)+'</div>';
+  const recs=dcRangeRecs(dcSumRange);
+  const stuIds=[...new Set(recs.map(r=>r.studentId))];
+  const hs=hwStat(recs); const tot=hs.done+hs.partial+hs.none;
+  const pct=tot?Math.round(hs.done/tot*100):0;
+  const durs=recs.map(dcDuration).filter(Boolean);
+  const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
+  const days=[...new Set(recs.map(r=>r.date))].length;
+  $('#daycare-stats').innerHTML='<div class="stat-card"><div class="s-num">'+recs.length+'</div><div class="s-lbl">\u6258\u73ed\u4eba\u6b21</div><div style="font-size:9px;color:var(--text3);margin-top:1px">'+days+' \u5929</div></div>'
+    +'<div class="stat-card"><div class="s-num">'+stuIds.length+'</div><div class="s-lbl">\u53c2\u4e0e\u5b66\u751f</div><div style="font-size:9px;color:var(--text3);margin-top:1px">\u5171 '+tot+' \u9879\u4f5c\u4e1a</div></div>'
+    +'<div class="stat-card"><div class="s-num" style="color:'+(tot?dcRateColor(pct):'var(--text3)')+'">'+(tot?pct+'%':'\u2014')+'</div><div class="s-lbl">\u4f5c\u4e1a\u5b8c\u6210\u7387</div><div style="font-size:9px;color:var(--text3);margin-top:1px">\u2713'+hs.done+' \u25d0'+hs.partial+' \u2717'+hs.none+'</div></div>'
+    +'<div class="stat-card"><div class="s-num" style="font-size:15px;line-height:26px">'+fmtDcDur(avg)+'</div><div class="s-lbl">\u5e73\u5747\u6258\u7ba1\u65f6\u957f</div><div style="font-size:9px;color:var(--text3);margin-top:1px">'+durs.length+' \u4eba\u6709\u65f6\u957f</div></div>';
+  if(!recs.length){
+    $('#daycare-content').innerHTML='<div class="card" style="text-align:center;color:var(--text3);font-size:12px;padding:24px">\u8be5\u65f6\u6bb5\u6682\u65e0\u6258\u73ed\u8bb0\u5f55</div>';
+    return;
+  }
+  let html='';
+  const st=dcSubjectStat(recs);
+  const keys=Object.keys(st).filter(k=>st[k].total>0).sort((a,b)=>st[b].total-st[a].total);
+  html+='<div class="card-h" style="margin:4px 0 8px"><h3>\U0001f4da \u79d1\u76ee\u4f5c\u4e1a\u7edf\u8ba1</h3><span style="font-size:11px;color:var(--text3)">'+keys.length+' \u79d1</span></div>';
+  html+='<div class="card" style="padding:0;margin-bottom:10px;overflow:hidden"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+    +'<tr style="background:var(--bg)"><th style="padding:7px 8px;text-align:left;font-weight:600">\u79d1\u76ee</th><th style="padding:7px 2px;font-weight:600">\u2713</th><th style="padding:7px 2px;font-weight:600">\u25d0</th><th style="padding:7px 2px;font-weight:600">\u2717</th><th style="padding:7px 8px;text-align:right;font-weight:600">\u5b8c\u6210\u7387</th></tr>';
+  keys.forEach(k=>{
+    const v=st[k]; const p=dcRateOf(v);
+    html+='<tr style="border-top:1px solid var(--border)"><td style="padding:7px 8px;font-weight:600">'+k+'</td>'
+      +'<td style="padding:7px 2px;text-align:center;color:#16a34a">'+v.done+'</td>'
+      +'<td style="padding:7px 2px;text-align:center;color:#d97706">'+v.partial+'</td>'
+      +'<td style="padding:7px 2px;text-align:center;color:#dc2626">'+v.none+'</td>'
+      +'<td style="padding:7px 8px;text-align:right"><span style="font-weight:700;color:'+dcRateColor(p)+'">'+p+'%</span></td></tr>';
+  });
+  html+='</table></div>';
+  const rows=dcStuRows(recs);
+  html+='<div class="card-h" style="margin:4px 0 8px"><h3>\U0001f465 \u5b66\u751f\u4f5c\u4e1a\u5b8c\u6210\u7387</h3><span style="font-size:11px;color:var(--text3)">\u9700\u8ddf\u8fdb\u5728\u524d</span></div>';
+  html+='<div class="card" style="padding:0;margin-bottom:10px;overflow:hidden"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+    +'<tr style="background:var(--bg)"><th style="padding:7px 8px;text-align:left;font-weight:600">\u5b66\u751f</th><th style="padding:7px 2px;font-weight:600">\u5929</th><th style="padding:7px 2px;font-weight:600">\u2713</th><th style="padding:7px 2px;font-weight:600">\u25d0</th><th style="padding:7px 2px;font-weight:600">\u2717</th><th style="padding:7px 8px;text-align:right;font-weight:600">\u5b8c\u6210\u7387</th></tr>';
+  rows.forEach(x=>{
+    const stu=DB.data.students[x.sid];
+    const nm=stu&&!stu._deleted?stu.name:'(\u5df2\u5220\u9664)';
+    html+='<tr style="border-top:1px solid var(--border)" onclick="showDcPerson(\''+x.sid+'\')"><td style="padding:7px 8px;font-weight:600">'+nm+'</td>'
+      +'<td style="padding:7px 2px;text-align:center;color:var(--text3)">'+x.days+'</td>'
+      +'<td style="padding:7px 2px;text-align:center;color:#16a34a">'+x.done+'</td>'
+      +'<td style="padding:7px 2px;text-align:center;color:#d97706">'+x.partial+'</td>'
+      +'<td style="padding:7px 2px;text-align:center;color:#dc2626">'+x.none+'</td>'
+      +'<td style="padding:7px 8px;text-align:right">'+(x.pct<0?'<span style="color:#9ca3af">\u672a\u8bb0</span>':'<span style="font-weight:700;color:'+dcRateColor(x.pct)+'">'+x.pct+'%</span>')+'</td></tr>';
+  });
+  html+='</table></div>';
+  const byDate={};
+  recs.forEach(r=>{ if(!byDate[r.date]) byDate[r.date]=[]; byDate[r.date].push(r); });
+  const dateKeys=Object.keys(byDate).sort();
+  if(dateKeys.length>1){
+    html+='<div class="card-h" style="margin:4px 0 8px"><h3>\U0001f4c8 \u6bcf\u65e5\u8d8b\u52bf</h3><span style="font-size:11px;color:var(--text3)">\u6700\u8fd1'+Math.min(14,dateKeys.length)+'\u5929</span></div><div class="card" style="padding:12px;margin-bottom:10px">';
+    dateKeys.slice(-14).forEach(d=>{
+      const rs=byDate[d]; const h=hwStat(rs); const t=h.done+h.partial+h.none; const p=t?Math.round(h.done/t*100):0;
+      html+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;font-size:11px">'
+        +'<span style="width:42px;color:var(--text2);font-weight:600">'+d.slice(5)+'</span>'
+        +'<span style="width:30px;color:var(--text3)">'+rs.length+'\u4eba</span>'
+        +'<div style="flex:1;height:8px;background:#eef0f3;border-radius:4px;overflow:hidden"><div style="width:'+p+'%;height:100%;background:'+dcRateColor(p)+';border-radius:4px"></div></div>'
+        +'<span style="width:34px;text-align:right;font-weight:700;color:'+(t?dcRateColor(p):'#9ca3af')+'">'+(t?p+'%':'\u2014')+'</span></div>';
+    });
+    html+='</div>';
+  }
+  $('#daycare-content').innerHTML=html;
+}
+function exportDcSum(){
+  const recs=dcRangeRecs(dcSumRange);
+  if(!recs.length){ toast('\u8be5\u65f6\u6bb5\u6682\u65e0\u8bb0\u5f55'); return; }
+  toast('\u6b63\u5728\u751f\u6210\u56fe\u7247...');
+  const stuIds=[...new Set(recs.map(r=>r.studentId))];
+  const hs=hwStat(recs); const tot=hs.done+hs.partial+hs.none;
+  const pct=tot?Math.round(hs.done/tot*100):0;
+  const durs=recs.map(dcDuration).filter(Boolean);
+  const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
+  const days=[...new Set(recs.map(r=>r.date))].length;
+  let html='<div style="background:#fff;color:#1a1a1a;padding:16px;font-family:system-ui,sans-serif">'
+    +'<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:12px">'
+    +'<span style="font-size:16px;font-weight:700">\U0001f3eb \u6258\u73ed\u6c47\u603b</span>'
+    +'<span style="font-size:12px;color:#666">'+dcRangeLabel(dcSumRange)+'</span></div>'
+    +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px">'
+    +'<div style="background:#eff6ff;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#1d4ed8">'+recs.length+'</div><div style="font-size:9px;color:#666">\u4eba\u6b21</div></div>'
+    +'<div style="background:#f5f3ff;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#7c3aed">'+stuIds.length+'</div><div style="font-size:9px;color:#666">\u5b66\u751f</div></div>'
+    +'<div style="background:#f0fdf4;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#16a34a">'+(tot?pct+'%':'\u2014')+'</div><div style="font-size:9px;color:#666">\u5b8c\u6210\u7387</div></div>'
+    +'<div style="background:#fef3c7;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#d97706">'+fmtDcDur(avg)+'</div><div style="font-size:9px;color:#666">\u5747\u65f6\u957f</div></div></div>';
+  const st=dcSubjectStat(recs);
+  const keys=Object.keys(st).filter(k=>st[k].total>0).sort((a,b)=>st[b].total-st[a].total);
+  html+='<div style="font-size:13px;font-weight:600;margin-bottom:6px">\U0001f4da \u79d1\u76ee\u7edf\u8ba1</div>'
+    +'<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px">'
+    +'<tr style="background:#f9fafb"><th style="padding:6px;text-align:left">\u79d1\u76ee</th><th style="padding:6px">\u2713</th><th style="padding:6px">\u25d0</th><th style="padding:6px">\u2717</th><th style="padding:6px">\u5b8c\u6210\u7387</th></tr>';
+  keys.forEach(k=>{
+    const v=st[k]; const p=dcRateOf(v);
+    html+='<tr style="border-top:1px solid #e5e7eb"><td style="padding:6px;font-weight:600">'+k+'</td>'
+      +'<td style="padding:6px;text-align:center;color:#16a34a">'+v.done+'</td>'
+      +'<td style="padding:6px;text-align:center;color:#d97706">'+v.partial+'</td>'
+      +'<td style="padding:6px;text-align:center;color:#dc2626">'+v.none+'</td>'
+      +'<td style="padding:6px;text-align:center;font-weight:700;color:'+dcRateColor(p)+'">'+p+'%</td></tr>';
+  });
+  html+='</table>';
+  const rows=dcStuRows(recs);
+  html+='<div style="font-size:13px;font-weight:600;margin-bottom:6px">\U0001f465 \u5b66\u751f\u660e\u7ec6</div>'
+    +'<table style="width:100%;border-collapse:collapse;font-size:11px">'
+    +'<tr style="background:#f9fafb"><th style="padding:6px;text-align:left">\u5b66\u751f</th><th style="padding:6px">\u5929</th><th style="padding:6px">\u2713</th><th style="padding:6px">\u25d0</th><th style="padding:6px">\u2717</th><th style="padding:6px">\u5b8c\u6210\u7387</th></tr>';
+  rows.forEach(x=>{
+    const stu=DB.data.students[x.sid];
+    const nm=stu&&!stu._deleted?stu.name:'(\u5df2\u5220\u9664)';
+    html+='<tr style="border-top:1px solid #e5e7eb"><td style="padding:6px;font-weight:600">'+nm+'</td>'
+      +'<td style="padding:6px;text-align:center;color:#666">'+x.days+'</td>'
+      +'<td style="padding:6px;text-align:center;color:#16a34a">'+x.done+'</td>'
+      +'<td style="padding:6px;text-align:center;color:#d97706">'+x.partial+'</td>'
+      +'<td style="padding:6px;text-align:center;color:#dc2626">'+x.none+'</td>'
+      +'<td style="padding:6px;text-align:center;font-weight:700;color:'+(x.pct<0?'#9ca3af':dcRateColor(x.pct))+'">'+(x.pct<0?'\u672a\u8bb0':x.pct+'%')+'</td></tr>';
+  });
+  html+='</table></div>';
+  const wrap=document.createElement('div');
+  wrap.style.cssText='position:fixed;left:-99999px;top:0;width:420px;background:#fff;z-index:-1';
+  wrap.innerHTML=html;
+  document.body.appendChild(wrap);
+  ensureHtml2Canvas(()=>{
+    html2canvas(wrap,{scale:2,backgroundColor:'#fff'}).then(canvas=>{
+      wrap.remove();
+      canvas.toBlob(blob=>{
+        if(!blob){ toast('\u5bfc\u51fa\u5931\u8d25\uff1a\u65e0\u6cd5\u751f\u6210\u56fe\u7247'); return; }
+        downloadBlob(blob,'\u6258\u73ed\u6c47\u603b_'+dcSumRange+'_'+todayStr()+'.png');
+        toast('\u2705 \u56fe\u7247\u5df2\u4fdd\u5b58');
+      },'image/png');
+    }).catch(e=>{ wrap.remove(); toast('\u5bfc\u51fa\u5931\u8d25\uff1a'+e.message); });
+  });
+}
+function toggleDcMore(btn){
+  const box=$('#dc-hw-more'); if(!box) return;
+  const show=box.style.display==='none';
+  box.style.display=show?'':'none';
+  btn.textContent=show?'\u25be \u6536\u8d77\u989d\u5916\u79d1\u76ee':'...';
+  if(!show) btn.textContent='\u25b8 \u5c55\u5f00\u66f4\u591a\u79d1\u76ee\uff08'+box.children.length+'\uff09';
 }
 
 function renderRecords(){
@@ -8432,7 +8752,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v50';
+    const sw=`const C='tw-cache-v51';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
