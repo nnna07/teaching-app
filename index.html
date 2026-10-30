@@ -578,8 +578,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.37.0';
-const APP_VERSION_DATE = '2026-10-30';
+const APP_VERSION = 'v3.38.0';
+const APP_VERSION_DATE = '2026-09-01';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -726,16 +726,22 @@ const DB = {
   },
   save(){
     this.data._updatedAt = now();
-    localStorage.setItem(this.KEY, JSON.stringify(this.data));
+    try{ localStorage.setItem(this.KEY, JSON.stringify(this.data)); }
+    catch(e){
+      const quota = e && (e.name==='QuotaExceededError' || e.code===22 || e.code===1014);
+      if(typeof toast==='function') toast(quota ? '\u26a0\ufe0f 保存失败：本地存储已满，请先删除旧的作业照片再试' : '\u26a0\ufe0f 保存失败，请重试（内容仍在页面上，未写入本地）');
+      return false;
+    }
     if(this.config && this.config.autoSync && isCosConfigured()){ scheduleCloudSync(); }
     if(this.config && this.config.freeSyncOn && this.config.freeSyncBlobId){ scheduleFreeSync(); }
     // 广播给同浏览器其他标签页
     try{ if(syncBC) syncBC.postMessage({type:'update', updatedAt:this.data._updatedAt}); }catch(e){}
+    return true;
   },
   saveConfig(){ localStorage.setItem(this.CONFIG_KEY, JSON.stringify(this.config)); },
   _seed(){
     return { _updatedAt:now(), _version:0, currentTeacherId:null,
-      teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, checkins:{}, daycare:{}, trash:{}, settings:{} };
+      teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, checkins:{}, daycare:{}, dcRoster:{}, dcDraft:{}, dcTemplates:{}, trash:{}, settings:{} };
   },
   merge(incoming){
     // 兼容处理：如果 incoming 被嵌套包裹在 data 字段中，递归解包
@@ -748,7 +754,7 @@ const DB = {
     }
     incoming = data;
     let changes=0;
-    for(const table of ['teachers','students','lessons','sessions','supervisions','checkins','daycare','trash','settings']){
+    for(const table of ['teachers','students','lessons','sessions','supervisions','checkins','daycare','dcRoster','dcDraft','dcTemplates','trash','settings']){
       for(const id in (incoming[table]||{})){
         const inc=incoming[table][id], loc=this.data[table]?this.data[table][id]:null;
         if(!loc || (inc.updatedAt||0)>(loc.updatedAt||0)){
@@ -999,8 +1005,8 @@ async function restoreFromBackup(key,dow){
     if(!text){ toast('该天没有备份'); return; }
     let data=JSON.parse(text);
     data=unwrapSyncData(data);
-    DB.data={ _updatedAt:now(), _version:0, currentTeacherId:null, teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, checkins:{}, daycare:{}, trash:{}, settings:{} };
-    for(const table of ['teachers','students','lessons','sessions','supervisions','checkins','daycare','trash','settings']){
+    DB.data={ _updatedAt:now(), _version:0, currentTeacherId:null, teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, checkins:{}, daycare:{}, dcRoster:{}, dcDraft:{}, dcTemplates:{}, trash:{}, settings:{} };
+    for(const table of ['teachers','students','lessons','sessions','supervisions','checkins','daycare','dcRoster','dcDraft','dcTemplates','trash','settings']){
       if(data[table]) for(const id in data[table]){ if(!data[table][id]._deleted) DB.data[table][id]=data[table][id]; }
     }
     DB.save(); closeModal(); refreshCurrentView();
@@ -1042,8 +1048,8 @@ async function pullCloudOnly(){
       let syncData = JSON.parse(cloudText);
       syncData = unwrapSyncData(syncData);
       DB.data = { _updatedAt:now(), _version:0, currentTeacherId:null,
-        teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, checkins:{}, daycare:{}, trash:{}, settings:{} };
-      for(const table of ['teachers','students','lessons','sessions','supervisions','checkins','daycare','trash','settings']){
+        teachers:{}, students:{}, lessons:{}, sessions:{}, supervisions:{}, checkins:{}, daycare:{}, dcRoster:{}, dcDraft:{}, dcTemplates:{}, trash:{}, settings:{} };
+      for(const table of ['teachers','students','lessons','sessions','supervisions','checkins','daycare','dcRoster','dcDraft','dcTemplates','trash','settings']){
         if(syncData[table]){
           for(const id in syncData[table]){
             if(!syncData[table][id]._deleted){
@@ -6321,6 +6327,8 @@ function openParentWeekly(studentId){
   const s=DB.data.students[studentId]; if(!s||s._deleted) return;
   const weekSet=new Set(getWeekDates(0));
   const inWeek=d=>weekSet.has(d);
+  const _wd=Array.from(weekSet).sort();
+  const wkLabel=_wd.length?(_wd[0].slice(5)+' ~ '+_wd[_wd.length-1].slice(5)):'';
   // 本周上课
   const sessions=Object.values(DB.data.sessions).filter(ss=>!ss._deleted && ss.studentIds.includes(studentId) && inWeek(ss.date||'') && ss.status!=='planned').sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   const doneSs=sessions.filter(ss=>ss.status==='done');
@@ -6336,7 +6344,7 @@ function openParentWeekly(studentId){
     <div class="pr-header">
       <div class="pr-name">${s.name}</div>
       <div class="pr-info">${s.grade||''} · 本周周报</div>
-      <div class="pr-info" style="margin-top:2px">${wk.monthLabel}</div>
+      <div class="pr-info" style="margin-top:2px">${wkLabel}</div>
     </div>
     <div class="pr-stat-row">
       <div class="pr-stat"><div class="num" style="color:#4f46e5">${doneSs.length}</div><div class="lbl">本周上课</div></div>
@@ -6382,7 +6390,9 @@ function openParentWeekly(studentId){
     html+=`<div class="pr-section-title">🏫 托班 (${dcs.length}天${dcMin?` · 共${fmtDcDur(dcMin)}`:''})</div>`;
     dcs.forEach(r=>{
       const dur=dcDuration(r);
-      const chips=hwChips(r);
+      const chips=r.noHw
+        ? '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:#6b728018;color:#6b7280">今日无作业</span>'
+        : dcItems(r).map(it=>{const st=dcStatus(it.st);return '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:'+st.c+'18;color:'+st.c+'">'+dcEsc(it.s||'其他')+' · '+st.t+'</span>';}).join('');
       html+=`<div style="padding:5px 0;border-bottom:1px dashed #e5e7eb;font-size:12px">
         <div style="display:flex;align-items:center;gap:6px"><span style="font-weight:600">${r.date.slice(5)} 周${dayNames[dayOfWeek(r.date)][1]}</span><span style="margin-left:auto;color:#6b7280;font-size:11px">${r.arrive||'--:--'}~${r.leave||'--:--'}${dur?' · '+fmtDcDur(dur):''}</span></div>
         ${chips?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${chips}</div>`:''}
@@ -6439,55 +6449,57 @@ function getSessionMinutesByDate(){
   return map;
 }
 
-/* ==================== 托班记录 ==================== */
-let dcView='day';
-let dcDate='';
-let dcPersonId='';
-let dcFilter='all';
-let dcSumRange='week';
-const DC_STATUS=[{k:'done',t:'✓ 完成',c:'#16a34a',bg:'#dcfce7'},{k:'partial',t:'◐ 部分',c:'#d97706',bg:'#fef3c7'},{k:'none',t:'✗ 未做',c:'#dc2626',bg:'#fee2e2'}];
+/* ==================== 托班记录（以“学生→逐项作业”为主流程） ==================== */
+let dcView='day', dcDate='', dcPersonId='';
+let dcFilter='all', dcSumRange='week', dcKw='', dcGradeF='all', dcOpenId='';
+let dcBusy=false;
+let dcUndo=null, dcUndoTimer=null;
+let dcEntry=null;
+
+/* 作业状态：未完成 / 待检查 / 待订正 / 已完成（已完成=老师检查通过） */
+const DC_STATUS=[{k:'todo',t:'未完成',c:'#6b7280',bg:'#f3f4f6'},
+                 {k:'tocheck',t:'待检查',c:'#2563eb',bg:'#dbeafe'},
+                 {k:'fix',t:'待订正',c:'#d97706',bg:'#fef3c7'},
+                 {k:'done',t:'已完成',c:'#16a34a',bg:'#dcfce7'}];
 const DC_SUBJECTS_DEFAULT=['语文','数学','英语','科学'];
 const DC_GROUPS=['小学','初中','高中','其他'];
 const DC_WD=['日','一','二','三','四','五','六'];
-function dcStatus(k){ return DC_STATUS.find(s=>s.k===k); }
-function setDcView(v){ dcView=v; dcPersonId=''; dcFilter='all'; document.querySelectorAll('#dc-view-switch button').forEach(b=>b.classList.toggle('active',b.dataset.dcv===v)); renderDaycare(); }
-function shiftDcDate(d){ const x=new Date(dcDate+'T00:00:00'); x.setDate(x.getDate()+d); dcDate=fmtDate(x); renderDaycare(); }
-function goDcToday(){ dcDate=todayStr(); renderDaycare(); }
-function backDcPeople(){ dcPersonId=''; renderDaycare(); }
-let dcUnShown=false;
-function toggleDcUn(){ dcUnShown=!dcUnShown; renderDaycare(); }
-function batchDcLeave(){
-  const time=new Date().toTimeString().slice(0,5);
-  const recs=getDaycareRecords(dcDate).filter(r=>!r.leave);
-  if(!recs.length){ toast('当天没有待离班的记录'); return; }
-  if(!confirm('为 '+recs.length+' 名学生记录离班时间 '+time+' ？')) return;
-  recs.forEach(r=>{ r.leave=time; r.updatedAt=now(); });
-  DB.save(); renderDaycare(); toast('✓ 已记录 '+recs.length+' 人离班（'+time+'）');
+const DC_QUICK_DEFAULT=['计算需仔细','背诵需巩固','已完成订正','需家长继续跟进'];
+
+function dcStatus(k){ return DC_STATUS.find(x=>x.k===k)||DC_STATUS[0]; }
+function dcEsc(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function dcTable(t){ if(!DB.data[t]) DB.data[t]={}; return DB.data[t]; }
+function dcItems(r){ return (r&&Array.isArray(r.items))?r.items:[]; }
+function dcCounts(r){ const c={todo:0,tocheck:0,fix:0,done:0}; dcItems(r).forEach(it=>{ if(c[it.st]!==undefined) c[it.st]++; }); return c; }
+function dcTotal(r){ const c=dcCounts(r); return c.todo+c.tocheck+c.fix+c.done; }
+
+/* 旧数据迁移：学科整体状态 → 独立作业条目（保留原始记录，标注来源） */
+function dcMigrateOnce(){
+  if(DB.data.settings&&DB.data.settings._dcMigrated) return;
+  if(!DB.data.settings) DB.data.settings={};
+  const mapSt={none:'todo',partial:'fix',done:'done'};
+  Object.values(DB.data.daycare||{}).forEach(r=>{
+    if(r._deleted) return;
+    if(!Array.isArray(r.items)){
+      const old=Array.isArray(r.homework)?r.homework:[];
+      r.items=old.map(h=>({id:uid(),s:h.s||'',text:h.task||'',st:mapSt[h.st]||'todo',note:h.note||'',legacy:true}));
+      if(old.length) r.homeworkLegacy=old;
+    }
+  });
+  DB.data.settings._dcMigrated=now();
+  DB.save();
 }
-function showDcPerson(sid){ dcPersonId=sid; renderDaycare(); }
-function allDaycareRecords(){ return Object.values(DB.data.daycare).filter(r=>!r._deleted); }
+
+function allDaycareRecords(){ return Object.values(DB.data.daycare||{}).filter(r=>!r._deleted); }
 function getDaycareRecords(date){ return allDaycareRecords().filter(r=>r.date===date); }
-function findDaycareRecord(studentId,date){ return allDaycareRecords().find(r=>r.studentId===studentId && r.date===date); }
-function dcAllSubjects(){
-  const set=new Set(DC_SUBJECTS_DEFAULT);
-  allDaycareRecords().forEach(r=>(r.homework||[]).forEach(h=>{ if(h.s) set.add(h.s); }));
-  return [...set];
+function findDaycareRecord(sid,date){ return allDaycareRecords().find(r=>r.studentId===sid && r.date===date); }
+function dcDuration(r){
+  if(!r||!r.arrive||!r.leave) return 0;
+  const [ah,am]=(r.arrive||'0:0').split(':').map(Number);
+  const [lh,lm]=(r.leave||'0:0').split(':').map(Number);
+  let m=(lh*60+lm)-(ah*60+am); if(m<0) m+=1440; return m;
 }
-function dcHwSubjects(studentId){
-  // 按使用频率排序（该学生优先，再看全体），默认科目垫底按名称排
-  const freq={};
-  allDaycareRecords().forEach(r=>{
-    const w=(studentId&&r.studentId===studentId)?5:1;
-    (r.homework||[]).forEach(h=>{ if(h.s) freq[h.s]=(freq[h.s]||0)+w; });
-  });
-  return dcAllSubjects().sort((a,b)=>{
-    const fa=freq[a]||0, fb=freq[b]||0;
-    if(fa!==fb) return fb-fa;
-    const da=DC_SUBJECTS_DEFAULT.includes(a)?1:0, db=DC_SUBJECTS_DEFAULT.includes(b)?1:0;
-    if(da!==db) return db-da;
-    return a.localeCompare(b);
-  });
-}
+function fmtDcDur(m){ if(!m) return '—'; const h=Math.floor(m/60),mm=m%60; return h?(mm?h+'小时'+mm+'分':h+'小时'):mm+'分钟'; }
 function gradeGroup(g){
   if(!g) return '其他';
   if(g==='小学'||/^[一二三四五六]年级$/.test(g)) return '小学';
@@ -6495,637 +6507,988 @@ function gradeGroup(g){
   if(g==='高中'||/^高[一二三]$/.test(g)) return '高中';
   return '其他';
 }
-function dcDuration(r){
-  if(!r.arrive||!r.leave) return 0;
-  const [ah,am]=(r.arrive||'0:0').split(':').map(Number);
-  const [lh,lm]=(r.leave||'0:0').split(':').map(Number);
-  let m=(lh*60+lm)-(ah*60+am); if(m<0) m+=1440;
-  return m;
+function dcAllSubjects(){
+  const set=new Set(DC_SUBJECTS_DEFAULT);
+  allDaycareRecords().forEach(r=>dcItems(r).forEach(it=>{ if(it.s) set.add(it.s); }));
+  const T=dcTable('dcTemplates'); Object.values(T).forEach(t=>(t.items||[]).forEach(it=>{ if(it.s) set.add(it.s); }));
+  return [...set];
 }
-function fmtDcDur(m){ if(!m) return '—'; const h=Math.floor(m/60),mm=m%60; return h?(mm?h+'小时'+mm+'分':h+'小时'):mm+'分钟'; }
-function hwStat(recs){ const c={done:0,partial:0,none:0}; recs.forEach(r=>(r.homework||[]).forEach(h=>{ if(c[h.st]!==undefined) c[h.st]++; })); return c; }
-function hwChips(rec){
-  return (rec.homework||[]).map(h=>{ const st=dcStatus(h.st); if(!st) return ''; return `<span style="background:${st.bg};color:${st.c};border-radius:8px;padding:1px 6px;font-size:10px">${h.s}${st.t.slice(0,1)}${h.note?'·'+h.note:''}</span>`; }).join('');
+function dcHwSubjects(sid){
+  const freq={};
+  allDaycareRecords().forEach(r=>{ const w=(sid&&r.studentId===sid)?5:1; dcItems(r).forEach(it=>{ if(it.s) freq[it.s]=(freq[it.s]||0)+w; }); });
+  return dcAllSubjects().sort((a,b)=>{
+    const fa=freq[a]||0, fb=freq[b]||0; if(fa!==fb) return fb-fa;
+    const da=DC_SUBJECTS_DEFAULT.includes(a)?1:0, db=DC_SUBJECTS_DEFAULT.includes(b)?1:0;
+    if(da!==db) return db-da; return a.localeCompare(b);
+  });
 }
-function renderDaycare(){
-  if(!dcDate) dcDate=todayStr();
-  if(dcView==='day') renderDcDay();
-  else if(dcView==='sum') renderDcSum();
-  else if(dcPersonId) renderDcPerson(dcPersonId);
-  else renderDcPeople();
-}
-function setDcFilter(f){ dcFilter=f; renderDaycare(); }
-function setDcSumRange(r){ dcSumRange=r; renderDaycare(); }
-/* ---- 作业统计核心 ---- */
 function dcSubjectStat(recs){
   const map={};
-  recs.forEach(r=>(r.homework||[]).forEach(h=>{
-    if(!h.s) return;
-    if(!map[h.s]) map[h.s]={done:0,partial:0,none:0,total:0};
-    if(map[h.s][h.st]!==undefined){ map[h.s][h.st]++; map[h.s].total++; }
+  recs.forEach(r=>dcItems(r).forEach(it=>{
+    const k=it.s||'未分科';
+    if(!map[k]) map[k]={todo:0,tocheck:0,fix:0,done:0,total:0};
+    if(map[k][it.st]!==undefined){ map[k][it.st]++; map[k].total++; }
   }));
   return map;
 }
 function dcRateOf(v){ return v&&v.total?Math.round(v.done/v.total*100):0; }
 function dcRateColor(p){ return p>=80?'#16a34a':(p>=50?'#d97706':'#dc2626'); }
-/* 作业看板：按科目横排，含三段进度条 */
-function dcHwBoardHtml(recs){
-  const st=dcSubjectStat(recs);
-  const keys=Object.keys(st).filter(k=>st[k].total>0).sort((a,b)=>st[b].total-st[a].total);
-  if(!keys.length) return '';
-  let grand={done:0,partial:0,none:0,total:0};
-  keys.forEach(k=>{ grand.done+=st[k].done; grand.partial+=st[k].partial; grand.none+=st[k].none; grand.total+=st[k].total; });
-  let h='<div class="card" style="padding:12px;margin-bottom:10px">'
-    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:9px">'
-    +'<span style="font-size:13px;font-weight:700">📚 作业看板</span>'
-    +'<span style="margin-left:auto;font-size:11px;color:var(--text3)">'+keys.length+' 科 · '+grand.total+' 项</span></div>';
-  keys.forEach(k=>{
-    const v=st[k]; const pct=dcRateOf(v);
-    h+='<div style="margin-bottom:9px">'
-      +'<div style="display:flex;align-items:center;gap:6px;font-size:11px;line-height:14px">'
-      +'<span style="font-weight:600;min-width:42px">'+k+'</span>'
-      +'<span style="color:#16a34a">✓'+v.done+'</span>'
-      +'<span style="color:#d97706">◐'+v.partial+'</span>'
-      +'<span style="color:#dc2626">✗'+v.none+'</span>'
-      +'<span style="margin-left:auto;font-weight:700;color:'+dcRateColor(pct)+'">'+pct+'%</span></div>'
-      +'<div style="height:5px;background:#eef0f3;border-radius:3px;margin-top:3px;overflow:hidden;display:flex">'
-      +'<div style="width:'+(v.done/v.total*100)+'%;background:#22c55e"></div>'
-      +'<div style="width:'+(v.partial/v.total*100)+'%;background:#f59e0b"></div>'
-      +'<div style="width:'+(v.none/v.total*100)+'%;background:#ef4444"></div></div></div>';
-  });
-  h+='<div style="display:flex;align-items:center;gap:6px;font-size:11px;line-height:14px;border-top:1px dashed var(--border);padding-top:7px;margin-top:2px">'
-    +'<span style="font-weight:700">合计</span>'
-    +'<span style="color:#16a34a">✓'+grand.done+'</span>'
-    +'<span style="color:#d97706">◐'+grand.partial+'</span>'
-    +'<span style="color:#dc2626">✗'+grand.none+'</span>'
-    +'<span style="margin-left:auto;font-weight:700;color:'+dcRateColor(dcRateOf(grand))+'">'+dcRateOf(grand)+'%</span></div>';
-  return h+'</div>';
+
+/* ---- 今日名单 ---- */
+function dcRosterIds(date){ const o=dcTable('dcRoster')[date]; return (o&&o.ids)||[]; }
+function dcRosterSet(date,ids){ const T=dcTable('dcRoster'); T[date]={id:date,date,ids:[...new Set(ids)],updatedAt:now()}; DB.save(); }
+function dcRosterAdd(date,ids){
+  const cur=dcRosterIds(date); const set=new Set(cur);
+  ids.forEach(i=>set.add(i));
+  dcRosterSet(date,[...set]);
 }
-/* 单科 chip：点击循环 完成→部分→未做→清除 */
-function dcChipHtml(r,subj){
-  const h=(r.homework||[]).find(x=>x.s===subj);
-  const st=dcStatus(h&&h.st);
-  if(!st) return '<span class="dc-chip" onclick="cycleDcHw(event,\''+r.id+'\',\''+subj+'\')" style="background:#f3f4f6;color:#9ca3af;border-radius:8px;padding:3px 8px;font-size:10px">'+subj+'</span>';
-  return '<span class="dc-chip" onclick="cycleDcHw(event,\''+r.id+'\',\''+subj+'\')" style="background:'+st.bg+';color:'+st.c+';border-radius:8px;padding:3px 8px;font-size:10px;font-weight:600">'+subj+' '+st.t.slice(0,1)+(h.note?'·'+h.note:'')+'</span>';
+function dcTodayStudents(){
+  const ids=new Set(dcRosterIds(dcDate));
+  getDaycareRecords(dcDate).forEach(r=>ids.add(r.studentId));
+  const out=[];
+  Object.values(DB.data.students||{}).forEach(st=>{ if(!st._deleted&&ids.has(st.id)) out.push(st); });
+  out.sort((a,b)=>a.name.localeCompare(b.name,'zh'));
+  return out;
 }
-function cycleDcHw(ev,recId,subj){
-  ev.stopPropagation();
-  const r=DB.data.daycare[recId]; if(!r||r._deleted) return;
-  r.homework=r.homework||[];
-  const cur=r.homework.find(x=>x.s===subj);
-  const order=['done','partial','none'];
-  if(!cur){ r.homework.push({s:subj,st:'done',note:''}); }
-  else {
-    const i=order.indexOf(cur.st);
-    if(i<0 || i===order.length-1){ r.homework=r.homework.filter(x=>x.s!==subj); }
-    else cur.st=order[i+1];
+function dcEnsureRecord(sid,date,arrive){
+  let r=findDaycareRecord(sid,date);
+  if(!r){
+    const id=uid(); const t=now();
+    r={id,studentId:sid,date,arrive:arrive||'',leave:'',items:[],note:'',photos:[],createdAt:t,updatedAt:t};
+    DB.data.daycare[id]=r;
   }
-  r.updatedAt=now(); DB.save();
-  const y=window.scrollY; renderDaycare(); window.scrollTo(0,y);
+  dcRosterAdd(date,[sid]);
+  return r;
 }
-function addDcHwInline(ev,recId){
-  ev.stopPropagation();
-  const r=DB.data.daycare[recId]; if(!r) return;
-  const nm=(prompt('科目名称（如：道法、物理、地理）')||'').trim();
-  if(!nm) return;
-  r.homework=r.homework||[];
-  if(r.homework.some(x=>x.s===nm)){ toast('该科目已存在'); return; }
-  r.homework.push({s:nm,st:'done',note:''});
-  r.updatedAt=now(); DB.save();
-  const y=window.scrollY; renderDaycare(); window.scrollTo(0,y);
+
+/* ---- 次数包（沿用） ---- */
+function dcUsedQuota(sid){ return allDaycareRecords().filter(r=>r.studentId===sid).length; }
+function dcQuotaLeft(s){ const q=(s&&s.dcQuota)||0; if(!q) return null; return q-dcUsedQuota(s.id); }
+function dcVisitBadge(s){
+  const left=dcQuotaLeft(s); if(left===null) return '';
+  const c=left<=0?'#dc2626':(left<=3?'#d97706':'#16a34a');
+  const bg=left<=0?'#fee2e2':(left<=3?'#fef3c7':'#dcfce7');
+  return '<span style="background:'+bg+';color:'+c+';border-radius:8px;padding:1px 5px;font-size:10px;font-weight:600">🎟 剩'+left+'次</span>';
 }
-/* 当日统计卡 */
-function dcStatsHtml(recs){
-  const left=recs.filter(r=>r.leave).length;
-  const inCare=recs.length-left;
-  const hs=hwStat(recs); const tot=hs.done+hs.partial+hs.none;
-  const pct=tot?Math.round(hs.done/tot*100):0;
-  const noHw=recs.filter(r=>!(r.homework||[]).length).length;
-  const durs=recs.map(dcDuration).filter(Boolean);
-  const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
-  return '<div class="stat-card"><div class="s-num">'+recs.length+'</div><div class="s-lbl">👥 托班人数</div><div style="font-size:9px;color:var(--text3);margin-top:1px">已离'+left+' · 在托'+inCare+'</div></div>'
-    +'<div class="stat-card"><div class="s-num" style="color:'+(tot?dcRateColor(pct):'var(--text3)')+'">'+(tot?pct+'%':'—')+'</div><div class="s-lbl">📚 作业完成率</div><div style="font-size:9px;color:var(--text3);margin-top:1px">✓'+hs.done+' ◐'+hs.partial+' ✗'+hs.none+'</div></div>'
-    +'<div class="stat-card"><div class="s-num" style="color:'+(noHw?'#d97706':'var(--primary)')+'">'+(recs.length-noHw)+'/'+recs.length+'</div><div class="s-lbl">✍️ 已记作业</div><div style="font-size:9px;color:var(--text3);margin-top:1px">'+(noHw?'未记 '+noHw+' 人':'全部已记')+'</div></div>'
-    +'<div class="stat-card"><div class="s-num" style="font-size:15px;line-height:26px">'+fmtDcDur(avg)+'</div><div class="s-lbl">⏱️ 平均托管时长</div><div style="font-size:9px;color:var(--text3);margin-top:1px">'+durs.length+' 人有时长</div></div>';
+function setDcQuota(sid){
+  const stu=DB.data.students[sid]; if(!stu) return;
+  const v=prompt('设定「'+stu.name+'」的托班总次数包（留空/0 为不限）：', stu.dcQuota||'');
+  if(v===null) return;
+  const q=parseInt(v,10)||0;
+  stu.dcQuota=q; stu.updatedAt=now(); DB.save(); renderDaycare();
+  toast(q?('✓ 已设定 '+stu.name+' 次数包 '+q+' 次（已用 '+dcUsedQuota(sid)+' 次）'):'已取消次数限制');
 }
-/* 学生卡片：作业科目行 */
-function dcChipsRow(r,stu){
-  const recorded=(r.homework||[]).map(h=>h.s);
-  const all=dcHwSubjects(stu?stu.id:'');
-  const list=[...new Set([...recorded,...all])].slice(0,8);
-  return '<div id="dc-chips-'+r.id+'" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px">'
-    +list.map(sub=>dcChipHtml(r,sub)).join('')
-    +'<span onclick="addDcHwInline(event,\''+r.id+'\')" style="background:#f3f4f6;color:var(--text3);border-radius:8px;padding:3px 8px;font-size:10px">＋</span></div>';
+
+/* ---- 视图切换 ---- */
+function setDcView(v){ dcView=v; dcPersonId=''; dcFilter='all'; dcOpenId=''; document.querySelectorAll('#dc-view-switch button').forEach(b=>b.classList.toggle('active',b.dataset.dcv===v)); renderDaycare(); }
+function shiftDcDate(d){ const x=new Date(dcDate+'T00:00:00'); x.setDate(x.getDate()+d); dcDate=fmtDate(x); dcOpenId=''; renderDaycare(); }
+function goDcToday(){ dcDate=todayStr(); dcOpenId=''; renderDaycare(); }
+function setDcFilter(f){ dcFilter=f; renderDaycare(); }
+function setDcSumRange(r){ dcSumRange=r; renderDaycare(); }
+function setDcGradeF(v){ dcGradeF=v; renderDaycare(); }
+function dcSearchInput(el){ dcKw=el.value||''; dcRenderList(); const n=$('#dc-search'); if(n){ n.focus(); try{ n.setSelectionRange(n.value.length,n.value.length); }catch(e){} } }
+function toggleDcCard(sid){ dcOpenId=(dcOpenId===sid?'':sid); renderDaycare(); }
+function renderDaycare(){
+  if(!dcDate) dcDate=todayStr();
+  dcMigrateOnce();
+  if(dcView==='day') renderDcDay();
+  else if(dcView==='sum') renderDcSum();
+  else if(dcPersonId) renderDcPerson(dcPersonId);
+  else renderDcPeople();
 }
-function dcCardHtml(s,r){
-  const dur=dcDuration(r);
-  const hs=hwStat([r]); const tot=hs.done+hs.partial+hs.none;
-  const warn=hs.none>0 ? '#dc2626' : (hs.partial>0 ? '#d97706' : '');
-  return '<div class="card" style="padding:10px 12px;margin-bottom:6px'+(warn?';border-left:3px solid '+warn:'')+'" onclick="openDcEdit(\''+s.id+'\',\''+r.id+'\')">'
-    +'<div style="display:flex;align-items:center;gap:6px">'
-    +'<span style="font-weight:600;font-size:14px">'+s.name+'</span>'+gradeTag(s.grade)+dcVisitBadge(s)
-    +(tot&&hs.none?'<span style="background:#fee2e2;color:#dc2626;border-radius:8px;padding:1px 6px;font-size:10px;font-weight:600">✗'+hs.none+'</span>':'')
-    +(tot&&!hs.none&&hs.partial?'<span style="background:#fef3c7;color:#d97706;border-radius:8px;padding:1px 6px;font-size:10px;font-weight:600">◐'+hs.partial+'</span>':'')
-    +(!tot?'<span style="background:#f3f4f6;color:#9ca3af;border-radius:8px;padding:1px 6px;font-size:10px">未记作业</span>':'')
-    +'<span style="margin-left:auto;font-size:11px;color:var(--text2);white-space:nowrap">'+(r.arrive||'--:--')+'~'+(r.leave||'--:--')+(dur?' · '+fmtDcDur(dur):'')+'</span></div>'
-    +dcChipsRow(r,s)+hwTasksHtml(r)
-    +(r.note?'<div style="font-size:11px;color:var(--text3);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📝 '+r.note+'</div>':'')
-    +'</div>';
-}
+
+/* ==================== 当日工作台 ==================== */
 function renderDcDay(){
   const isToday=dcDate===todayStr();
-  $('#dc-nav-box').innerHTML='<div style="display:flex;gap:5px;margin-bottom:8px;align-items:center">'
+  const recs=getDaycareRecords(dcDate);
+  const recMap={}; recs.forEach(r=>recMap[r.studentId]=r);
+  const todayStus=dcTodayStudents();
+  let cTodo=0,cCheck=0,cFix=0,cDone=0,inCare=0,left=0,noHw=0;
+  recs.forEach(r=>{
+    const c=dcCounts(r); cTodo+=c.todo; cCheck+=c.tocheck; cFix+=c.fix; cDone+=c.done;
+    if(r.leave) left++; else inCare++;
+    if(!dcItems(r).length && !r.noHw) noHw++;
+  });
+  const absent=todayStus.filter(s=>!recMap[s.id]).length;
+  $('#dc-nav-box').innerHTML=
+    '<div style="display:flex;gap:5px;margin-bottom:6px;align-items:center">'
     +'<button class="btn btn-sm btn-ghost" onclick="shiftDcDate(-1)">‹ 前一天</button>'
     +'<button class="btn btn-sm '+(isToday?'btn-primary':'btn-ghost')+'" style="flex:1;font-size:12px" onclick="goDcToday()">'+(+dcDate.slice(5,7))+'月'+(+dcDate.slice(8))+'日 周'+DC_WD[dayOfWeek(dcDate)]+(isToday?' · 今天':'')+'</button>'
     +'<button class="btn btn-sm btn-ghost" onclick="shiftDcDate(1)">后一天 ›</button></div>'
-    +'<div style="display:flex;gap:6px;margin-bottom:8px">'
-    +'<button class="btn btn-primary" style="flex:1;font-size:12px;padding:8px" onclick="openDcQuick()">+ 批量到班</button>'
-    +'<button class="btn btn-ghost" style="font-size:12px;padding:8px" onclick="batchDcLeave()">🚪 批量离班</button>'
-    +'<button class="btn btn-ghost" style="font-size:12px;padding:8px" onclick="exportDcDay()">📤 导出</button></div>';
-  const students=Object.values(DB.data.students).filter(s=>!s._deleted);
+    +'<div style="display:flex;gap:5px;flex-wrap:wrap;background:var(--card);border-radius:10px;padding:7px 9px;margin-bottom:6px;font-size:11px;color:var(--text2)">'
+    +'<span>应到 <b style="color:#111827">'+todayStus.length+'</b>人</span><span style="color:var(--border)">|</span>'
+    +'<span>在托 <b style="color:#2563eb">'+inCare+'</b></span><span style="color:var(--border)">|</span>'
+    +'<span>已离班 <b style="color:#16a34a">'+left+'</b></span><span style="color:var(--border)">|</span>'
+    +'<span>待检查 <b style="color:#2563eb">'+cCheck+'</b>项</span><span style="color:var(--border)">|</span>'
+    +'<span>待订正 <b style="color:#d97706">'+cFix+'</b>项</span><span style="color:var(--border)">|</span>'
+    +'<span>未完成 <b style="color:#6b7280">'+cTodo+'</b>项</span></div>'
+    +'<div style="display:flex;gap:5px;margin-bottom:6px">'
+    +'<button class="btn btn-primary" style="flex:1;font-size:12px;padding:8px" onclick="openDcQuick()">批量到班</button>'
+    +'<button class="btn btn-ghost" style="flex:1;font-size:12px;padding:8px" onclick="openDcHwEntry(\'\')">录入作业</button>'
+    +'<button class="btn btn-ghost" style="font-size:12px;padding:8px" onclick="batchDcLeave()">批量离班</button></div>'
+    +'<div style="display:flex;gap:5px;margin-bottom:6px">'
+    +'<button class="btn btn-ghost" style="flex:1;font-size:11px;padding:6px" onclick="openDcDaily()">📋 班级日报</button>'
+    +'<button class="btn btn-ghost" style="flex:1;font-size:11px;padding:6px" onclick="exportDcDay()">📤 导出当日</button></div>'
+    +(isCosConfigured()?'':'<div style="font-size:10px;color:#d97706;margin-bottom:6px">⚠️ 未开启云同步，数据仅保存在本机浏览器</div>');
+  $('#daycare-stats').innerHTML='';
+  window._dcSummary={expect:todayStus.length,inCare,left,cCheck,cFix,cTodo,noHw,absent,recs};
+  dcRenderList();
+}
+function dcFilterCount(k){
+  const S=window._dcSummary||{}; const recs=S.recs||[];
+  const n=(f)=>recs.filter(f).length;
+  if(k==='all') return recs.length?recs.length+ (S.absent||0) : (S.absent||0);
+  if(k==='noHw') return n(r=>!dcItems(r).length && !r.noHw);
+  if(k==='inCare') return n(r=>!r.leave);
+  if(k==='check') return n(r=>dcCounts(r).tocheck>0);
+  if(k==='fix') return n(r=>dcCounts(r).fix>0);
+  if(k==='done') return n(r=>{ const c=dcCounts(r); return dcTotal(r)>0 && c.done===dcTotal(r); });
+  if(k==='absent') return S.absent||0;
+  return 0;
+}
+function dcRenderList(){
   const recs=getDaycareRecords(dcDate);
   const recMap={}; recs.forEach(r=>recMap[r.studentId]=r);
-  const stuMap={}; students.forEach(s=>stuMap[s.id]=s);
-  $('#daycare-stats').innerHTML=dcStatsHtml(recs);
+  const S=window._dcSummary||{};
+  const todayStus=dcTodayStudents();
+  const allStus=Object.values(DB.data.students||{}).filter(x=>!x._deleted);
+  let list=todayStus.slice();
+  (S.absent? []:[]) ;
+  // 未到班（在名单但无记录）也参与“全部/未到班”展示
+  const kw=(dcKw||'').trim().toLowerCase();
+  const grades=[...new Set(allStus.map(x=>x.grade||'未分年级'))];
+  const FILTERS=[['all','全部'],['noHw','未录作业'],['inCare','在托'],['check','待检查'],['fix','待订正'],['done','已完成'],['absent','未到班']];
+  let html='';
+  if(dcUndo) html+='<div style="display:flex;align-items:center;gap:6px;background:#fff7ed;border:1px solid #fed7aa;border-radius:9px;padding:6px 9px;margin-bottom:6px;font-size:11px;color:#9a3412"><span>↩ '+dcEsc(dcUndo.label)+'</span><button class="btn btn-sm" style="margin-left:auto;font-size:11px;padding:3px 10px;border:1px solid #fdba74;color:#9a3412" onclick="dcUndoDo()">撤销</button></div>';
+  html+='<div style="display:flex;gap:5px;margin-bottom:6px">'
+    +'<input id="dc-search" class="form-control" style="flex:1;font-size:12px" placeholder="🔍 搜索姓名" value="'+dcEsc(dcKw)+'" oninput="dcSearchInput(this)">'
+    +'<select class="form-control" style="width:96px;font-size:12px;padding:6px" onchange="setDcGradeF(this.value)"><option value="all"'+(dcGradeF==='all'?' selected':'')+'>全部年级</option>'
+    +grades.map(g=>'<option value="'+dcEsc(g)+'"'+(dcGradeF===g?' selected':'')+'>'+dcEsc(g)+'</option>').join('')+'</select></div>';
+  html+='<div style="display:flex;gap:5px;overflow-x:auto;padding-bottom:6px;margin-bottom:4px">'
+    +FILTERS.map(f=>{ const act=dcFilter===f[0]; return '<button class="chip" style="white-space:nowrap;font-size:11px;padding:4px 9px;'+(act?'background:var(--primary);color:#fff;border-color:var(--primary)':'')+'" onclick="setDcFilter(\''+f[0]+'\')">'+f[1]+' '+dcFilterCount(f[0])+'</button>'; }).join('')+'</div>';
+  let shown=list.map(st=>({st,r:recMap[st.id]}));
+  if(dcFilter==='absent') shown=shown.filter(x=>!x.r);
+  else shown=shown.filter(x=>x.r);
+  if(dcFilter==='noHw') shown=shown.filter(x=>x.r && !dcItems(x.r).length && !x.r.noHw);
+  if(dcFilter==='inCare') shown=shown.filter(x=>x.r && !x.r.leave);
+  if(dcFilter==='check') shown=shown.filter(x=>x.r && dcCounts(x.r).tocheck>0);
+  if(dcFilter==='fix') shown=shown.filter(x=>x.r && dcCounts(x.r).fix>0);
+  if(dcFilter==='done') shown=shown.filter(x=>{ if(!x.r) return false; const c=dcCounts(x.r); return dcTotal(x.r)>0 && c.done===dcTotal(x.r); });
+  if(dcGradeF!=='all') shown=shown.filter(x=>(x.st.grade||'未分年级')===dcGradeF);
+  if(kw) shown=shown.filter(x=>x.st.name.toLowerCase().indexOf(kw)>=0);
+  if(!shown.length) html+='<div class="card" style="text-align:center;color:var(--text3);font-size:12px;padding:22px">没有符合条件的学生</div>';
+  shown.forEach(x=>{ html+=dcCardHtml(x.st,x.r); });
+  $('#daycare-content').innerHTML=html;
+  if(dcOpenId){ const el=document.getElementById('dc-card-'+dcOpenId); if(el) try{ el.scrollIntoView({block:'nearest'}); }catch(e){} }
+}
 
-  const fFollow=recs.filter(r=>(r.homework||[]).some(h=>h.st==='none'||h.st==='partial'));
-  const fInCare=recs.filter(r=>!r.leave);
-  const fNoHw=recs.filter(r=>!(r.homework||[]).length);
-  const fAbsent=students.filter(s=>!recMap[s.id]);
+/* ---- 学生卡片 + 展开作业区 ---- */
+function dcCardHtml(st,r){
+  const open=dcOpenId===st.id;
+  const c=dcCounts(r); const tot=dcTotal(r);
+  const stt=r?(r.leave?'<span style="background:#dcfce7;color:#16a34a;border-radius:8px;padding:1px 6px;font-size:10px">已离班</span>'
+    :(r.arrive?'<span style="background:#dbeafe;color:#2563eb;border-radius:8px;padding:1px 6px;font-size:10px">在托</span>'
+    :'<span style="background:#f3f4f6;color:#6b7280;border-radius:8px;padding:1px 6px;font-size:10px">已入名单</span>'))
+    :'<span style="background:#f3f4f6;color:#9ca3af;border-radius:8px;padding:1px 6px;font-size:10px">未到班</span>';
+  let prog;
+  if(!r) prog='<span style="color:var(--text3)">未到班，可先补记到班</span>';
+  else if(r.noHw) prog='<span style="color:#16a34a">今日无作业</span>';
+  else if(!tot) prog='<span style="color:#d97706">未录作业</span>';
+  else prog='<span>已完成 <b style="color:#16a34a">'+c.done+'</b>/'+tot+'</span>'
+    +(c.tocheck?'<span style="color:#2563eb"> · 待检查 '+c.tocheck+'</span>':'')
+    +(c.fix?'<span style="color:#d97706"> · 待订正 '+c.fix+'</span>':'')
+    +(c.todo?'<span style="color:#6b7280"> · 未完成 '+c.todo+'</span>':'');
+  const sub=[st.school,st.className,st.grade].filter(Boolean).join(' · ');
+  return '<div id="dc-card-'+st.id+'" class="card" style="padding:9px 11px;margin-bottom:6px'+(open?';border:1px solid var(--primary)':'')+'">'
+    +'<div onclick="toggleDcCard(\''+st.id+'\')" style="cursor:pointer">'
+    +'<div style="display:flex;align-items:center;gap:5px">'
+    +'<span style="font-weight:600;font-size:14px">'+dcEsc(st.name)+'</span>'+stt+dcVisitBadge(st)
+    +'<span style="margin-left:auto;font-size:10px;color:var(--text3)">'+(open?'收起 ▴':'展开 ▾')+'</span></div>'
+    +(sub?'<div style="font-size:10px;color:var(--text3);margin-top:2px">'+dcEsc(sub)+'</div>':'')
+    +'<div style="font-size:11px;color:var(--text2);margin-top:4px;line-height:1.6">'+prog+'</div>'
+    +(r&&r.note?'<div style="font-size:10px;color:var(--text3);margin-top:2px">📝 '+dcEsc(r.note)+'</div>':'')
+    +'</div>'
+    +(open?dcWorkHtml(st,r):'')
+    +'</div>';
+}
+function dcWorkHtml(st,r){
+  const subs=dcHwSubjects(st.id);
+  let h='<div style="margin-top:8px;border-top:1px dashed var(--border);padding-top:6px">';
+  if(!r){
+    h+='<div style="display:flex;gap:5px;margin-bottom:6px"><button class="btn btn-sm btn-primary" style="flex:1;font-size:11px" onclick="dcQuickArrive(\''+st.id+'\')">记录到班</button>'
+      +'<button class="btn btn-sm btn-ghost" style="flex:1;font-size:11px" onclick="openDcHwEntry(\''+st.id+'\')">直接录作业</button></div></div>';
+    return h;
+  }
+  h+='<div style="display:flex;gap:5px;margin-bottom:6px;flex-wrap:wrap">'
+    +'<button class="btn btn-sm btn-ghost" style="font-size:11px;padding:4px 8px" onclick="openDcTimeEdit(\''+r.id+'\')">🕐 到/离班 '+(r.arrive||'--:--')+'~'+(r.leave||'--:--')+'</button>'
+    +'<button class="btn btn-sm btn-primary" style="font-size:11px;padding:4px 8px" onclick="openDcHwEntry(\''+st.id+'\')">＋ 添加作业</button>'
+    +'<button class="btn btn-sm btn-ghost" style="font-size:11px;padding:4px 8px" onclick="openDcFeedback(\''+st.id+'\')">💬 今日反馈</button>'
+    +'</div>';
+  const groups={}; dcItems(r).forEach(it=>{ const k=it.s||'未分科'; if(!groups[k]) groups[k]=[]; groups[k].push(it); });
+  const keys=Object.keys(groups);
+  if(r.noHw){
+    h+='<div style="font-size:11px;color:#16a34a;padding:6px 0">已标记为「今日无作业」<button class="btn btn-sm btn-ghost" style="margin-left:6px;font-size:10px;padding:2px 8px" onclick="dcToggleNoHw(\''+r.id+'\')">取消标记</button></div>';
+  } else if(!keys.length){
+    h+='<div style="font-size:11px;color:#d97706;padding:6px 0">未录作业　<button class="btn btn-sm btn-ghost" style="margin-left:6px;font-size:10px;padding:2px 8px" onclick="dcToggleNoHw(\''+r.id+'\')">标记今日无作业</button></div>';
+  } else {
+    keys.forEach(k=>{
+      const arr=groups[k]; const doneN=arr.filter(x=>x.st==='done').length;
+      h+='<div style="margin-top:6px"><div style="font-size:11px;font-weight:700;color:var(--text2)">'+dcEsc(k)+' <span style="font-weight:400;color:var(--text3)">'+doneN+'/'+arr.length+'</span></div>';
+      arr.forEach(it=>{ h+=dcItemRowHtml(r,it); });
+      h+='</div>';
+    });
+    h+='<div style="display:flex;gap:5px;margin-top:8px"><button class="btn btn-sm btn-ghost" style="font-size:11px;padding:4px 8px" onclick="dcToggleNoHw(\''+r.id+'\')">标记今日无作业</button></div>';
+  }
+  if((r.photos||[]).length){
+    h+='<div style="margin-top:8px"><div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px">📷 作业照片（'+r.photos.length+'）</div><div style="display:flex;gap:6px;flex-wrap:wrap">'
+      +r.photos.map((p,i)=>'<img src="'+p.data+'" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--border)" onclick="dcViewPhoto(\''+r.id+'\','+i+')">').join('')+'</div></div>';
+  }
+  h+='</div>';
+  return h;
+}
+function dcItemRowHtml(r,it){
+  const st=dcStatus(it.st);
+  return '<div style="padding:5px 0;border-top:1px dashed var(--border)">'
+    +'<div style="display:flex;gap:5px;align-items:flex-start">'
+    +'<span style="flex:1;font-size:12px;line-height:1.5;word-break:break-word">'+dcEsc(it.text||'（未填内容）')+'</span>'
+    +'<button class="btn btn-sm btn-ghost" style="font-size:10px;padding:2px 6px" onclick="dcToggleNote(\''+it.id+'\')">📝 备注</button>'
+    +'<button class="btn btn-sm btn-ghost" style="margin-left:auto;font-size:10px;padding:2px 6px;color:#dc2626" onclick="dcDelItem(\''+r.id+'\',\''+it.id+'\')">✕ 删除</button>'
+    +'</div>'
+    +(it.uncertain?'<div style="font-size:10px;color:#d97706">❓ 待核对</div>':'')
+    +(it.legacy?'<div style="font-size:9px;color:#9ca3af">旧记录（按学科录入，未分条目）</div>':'')
+    +'<div style="display:flex;gap:3px;margin-top:4px">'
+    +DC_STATUS.map(x=>{ const on=it.st===x.k; return '<button class="btn btn-sm" style="flex:1;font-size:10px;padding:4px 1px;'+(on?'background:'+x.bg+';color:'+x.c+';border:1px solid '+x.c+';font-weight:700':'border:1px solid var(--border);color:var(--text3)')+'" onclick="dcSetItemStatus(\''+r.id+'\',\''+it.id+'\',\''+x.k+'\')">'+x.t+'</button>'; }).join('')
+    +'</div>'
+    +'<textarea id="dc-note-'+it.id+'" rows="2" class="form-control" style="display:none;margin-top:4px;font-size:11px" placeholder="备注，如：第5题计算错，需重做" onblur="dcSaveItemNote(\''+r.id+'\',\''+it.id+'\',this.value)">'+dcEsc(it.note||'')+'</textarea>'
+    +'</div>';
+}
+function dcToggleNote(iid){
+  const el=document.getElementById('dc-note-'+iid); if(!el) return;
+  const show=el.style.display==='none';
+  el.style.display=show?'':'none';
+  if(show){ el.focus(); }
+  else { el.blur && el.blur(); }
+}
+function dcSetItemStatus(rid,iid,st){
+  const r=DB.data.daycare[rid]; if(!r) return;
+  const it=dcItems(r).find(x=>x.id===iid); if(!it) return;
+  if(it.st===st) return;
+  const prev=it.st;
+  it.st=st; it.updatedAt=now(); r.updatedAt=now(); DB.save();
+  dcUndoPush('把「'+dcEsc(it.text||'作业')+'」改为'+dcStatus(st).t, ()=>{ it.st=prev; it.uncertain=false; r.updatedAt=now(); DB.save(); renderDaycare(); });
+  const y=window.scrollY; renderDaycare(); window.scrollTo(0,y);
+  toast('✓ 已保存：'+dcStatus(st).t);
+}
+function dcSaveItemNote(rid,iid,val){
+  const r=DB.data.daycare[rid]; if(!r) return;
+  const it=dcItems(r).find(x=>x.id===iid); if(!it) return;
+  if((it.note||'')===(val||'')) return;
+  it.note=val||''; it.updatedAt=now(); r.updatedAt=now(); DB.save();
+  toast('✓ 备注已保存');
+}
+function dcDelItem(rid,iid){
+  const r=DB.data.daycare[rid]; if(!r) return;
+  const idx=dcItems(r).findIndex(x=>x.id===iid); if(idx<0) return;
+  const it=r.items[idx];
+  if(!confirm('删除这条作业？\n'+(it.text||''))) return;
+  r.items.splice(idx,1); r.updatedAt=now(); DB.save();
+  dcUndoPush('删除「'+dcEsc(it.text||'作业')+'」', ()=>{ r.items.splice(idx,0,it); r.updatedAt=now(); DB.save(); renderDaycare(); });
+  renderDaycare(); toast('已删除（可撤销）');
+}
+function dcToggleNoHw(rid){
+  const r=DB.data.daycare[rid]; if(!r) return;
+  if(!r.noHw && dcItems(r).length && !confirm('该学生今天已录 '+dcItems(r).length+' 条作业，标记为「今日无作业」不会删除这些作业，仅作标记。继续？')) return;
+  r.noHw=!r.noHw; r.updatedAt=now(); DB.save(); renderDaycare();
+  toast(r.noHw?'已标记今日无作业':'已取消标记');
+}
+function dcUndoPush(label,fn){
+  dcUndo={label:label,restore:fn};
+  clearTimeout(dcUndoTimer);
+  dcUndoTimer=setTimeout(()=>{ dcUndo=null; if(dcView==='day') dcRenderList(); },12000);
+}
+function dcUndoDo(){
+  if(!dcUndo) return;
+  const f=dcUndo.restore; dcUndo=null; clearTimeout(dcUndoTimer);
+  try{ f(); toast('↩ 已撤销'); }catch(e){ toast('撤销失败'); }
+}
+function dcQuickArrive(sid){
+  const time=new Date().toTimeString().slice(0,5);
+  const r=dcEnsureRecord(sid,dcDate,time);
+  if(!r.arrive) r.arrive=time;
+  r.updatedAt=now(); DB.save(); renderDaycare(); toast('✓ 已记录到班 '+time);
+}
+function dcViewPhoto(rid,i){
+  const r=DB.data.daycare[rid]; if(!r||!r.photos||!r.photos[i]) return;
+  openModal('<img src="'+r.photos[i].data+'" style="width:100%;border-radius:8px"><div style="font-size:11px;color:var(--text3);margin-top:6px">'+dcEsc(r.photos[i].name||'')+'</div>',
+    '<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button><button class="btn btn-danger" style="flex:1" onclick="dcDelPhoto(\''+rid+'\','+i+')">删除照片</button>');
+  setSheetTitle('作业照片');
+}
+function dcDelPhoto(rid,i){
+  const r=DB.data.daycare[rid]; if(!r) return;
+  if(!confirm('删除这张照片？')) return;
+  r.photos.splice(i,1); r.updatedAt=now(); DB.save(); closeModal(); renderDaycare(); toast('已删除');
+}
 
-  let html='<div id="dc-hw-board">'+dcHwBoardHtml(recs)+'</div>';
-
-  const chips=[['all','全部',recs.length],['follow','⚠️ 待跟进',fFollow.length],['inCare','🕐 在托',fInCare.length],['noHw','➖ 未记作业',fNoHw.length],['absent','❓ 未到班',fAbsent.length]];
-  html+='<div class="filter-bar" style="margin-bottom:4px">'+chips.map(c=>{
-    const act=dcFilter===c[0];
-    return '<button class="chip" style="white-space:nowrap;'+(act?'background:var(--primary);color:#fff;border-color:var(--primary)':'')+'" onclick="setDcFilter(\''+c[0]+'\')">'+c[1]+' '+c[2]+'</button>';
-  }).join('')+'</div>';
-
-  if(!students.length){
-    html+='<div class="card" style="text-align:center;color:var(--text3);font-size:12px;padding:24px">暂无学生，请先在「我的」页面添加</div>';
-  } else if(dcFilter==='follow'){
-    html+='<div class="card-h" style="margin:4px 0 8px"><h3>⚠️ 作业待跟进（'+fFollow.length+'）</h3><span style="font-size:11px;color:var(--text3)">点科目可快速改状态</span></div>';
-    html+=fFollow.length?fFollow.map(r=>dcCardHtml(stuMap[r.studentId]||{id:r.studentId,name:'(已删除)',grade:''},r)).join('')
-      :'<div class="card" style="text-align:center;color:#16a34a;font-size:12px;padding:20px">✓ 所有人作业都完成了</div>';
-  } else if(dcFilter==='inCare'){
-    html+='<div class="card-h" style="margin:4px 0 8px"><h3>🕐 尚在托管（'+fInCare.length+'）</h3></div>';
-    html+=fInCare.length?fInCare.map(r=>dcCardHtml(stuMap[r.studentId]||{id:r.studentId,name:'(已删除)',grade:''},r)).join('')
-      :'<div class="card" style="text-align:center;color:#16a34a;font-size:12px;padding:20px">✓ 全部已离班</div>';
-  } else if(dcFilter==='noHw'){
-    html+='<div class="card-h" style="margin:4px 0 8px"><h3>➖ 未记作业（'+fNoHw.length+'）</h3><span style="font-size:11px;color:var(--text3)">点科目直接标记</span></div>';
-    html+=fNoHw.length?fNoHw.map(r=>dcCardHtml(stuMap[r.studentId]||{id:r.studentId,name:'(已删除)',grade:''},r)).join('')
-      :'<div class="card" style="text-align:center;color:#16a34a;font-size:12px;padding:20px">✓ 每人都记了作业</div>';
-  } else if(dcFilter==='absent'){
-    html+='<div class="card-h" style="margin:4px 0 8px"><h3>❓ 未到班（'+fAbsent.length+'）</h3><span style="font-size:11px;color:var(--text3)">点名字直接补记</span></div>';
-    if(fAbsent.length){
-      html+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">'+fAbsent.map(s=>'<button class="btn btn-ghost" style="font-size:12px;padding:10px 4px;display:flex;flex-direction:column;gap:2px" onclick="openDcEdit(\''+s.id+'\')"><span style="font-weight:600">'+s.name+'</span><span style="font-size:10px;color:var(--text3)">'+(s.grade||'未分年级')+'</span></button>').join('')+'</div>';
+/* ==================== 录入作业（手动 / 粘贴 / 图片） ==================== */
+function dcDraftKey(sid,date){ return (date||dcDate)+'|'+(sid||''); }
+function dcDraftGet(sid,date){
+  const o=dcTable('dcDraft')[dcDraftKey(sid,date)];
+  return o?{items:(o.items||[]).map(x=>Object.assign({},x)),photos:(o.photos||[]).slice()}:{items:[],photos:[]};
+}
+function dcDraftPut(){
+  if(!dcEntry) return;
+  const T=dcTable('dcDraft'); const k=dcDraftKey(dcEntry.sid,dcEntry.date);
+  if(!dcEntry.draft.items.length && !dcEntry.draft.photos.length){ delete T[k]; }
+  else T[k]={id:k,studentId:dcEntry.sid,date:dcEntry.date,items:dcEntry.draft.items,photos:dcEntry.draft.photos,updatedAt:now()};
+  DB.save();
+}
+function openDcHwEntry(sid){
+  const stus=dcTodayStudents();
+  if(!stus.length){ toast('请先用「批量到班」加入今日名单'); return; }
+  let target=sid;
+  if(!target){
+    const recs=getDaycareRecords(dcDate); const recMap={}; recs.forEach(r=>recMap[r.studentId]=r);
+    const pending=stus.find(s=>{ const r=recMap[s.id]; return !r || (!dcItems(r).length && !r.noHw); });
+    target=pending?pending.id:stus[0].id;
+  }
+  const d=dcDraftGet(target,dcDate);
+  dcEntry={sid:target,date:dcDate,tab:'manual',subj:dcHwSubjects(target)[0]||'语文',draft:d,sel:{}};
+  dcRenderEntry();
+}
+function dcEntrySwitch(sid){
+  if(!dcEntry) return;
+  dcDraftPut();
+  const d=dcDraftGet(sid,dcEntry.date);
+  dcEntry.sid=sid; dcEntry.draft=d; dcEntry.sel={}; dcEntry.subj=dcHwSubjects(sid)[0]||'语文';
+  dcRenderEntry();
+}
+function dcEntryTab(t){ if(!dcEntry) return; dcEntry.tab=t; dcRenderEntry(); }
+function dcSetEntrySubj(v){ if(!dcEntry) return; dcEntry.subj=v; }
+function dcRenderEntry(){
+  const st=DB.data.students[dcEntry.sid]; if(!st) return;
+  const stus=dcTodayStudents();
+  const subs=dcHwSubjects(dcEntry.sid);
+  const ocrOn=!!((DB.data.settings||{}).ocrUrl);
+  let h='<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">';
+  h+='<select class="form-control" style="flex:1;font-size:13px;font-weight:600" onchange="dcEntrySwitch(this.value)">'
+    +stus.map(s=>'<option value="'+s.id+'"'+(s.id===dcEntry.sid?' selected':'')+'>'+dcEsc(s.name)+'</option>').join('')+'</select>';
+  h+='<span style="font-size:11px;color:var(--text3);white-space:nowrap">'+(+dcEntry.date.slice(5,7))+'/'+(+dcEntry.date.slice(8))+'</span></div>';
+  h+='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">草稿按「学生+日期」分别保存，刷新后可继续</div>';
+  h+='<div style="display:flex;gap:4px;margin-bottom:8px">'
+    +[['manual','手动输入'],['paste','粘贴文本'],['photo','图片']].map(t=>'<button class="btn btn-sm '+(dcEntry.tab===t[0]?'btn-primary':'btn-ghost')+'" style="flex:1;font-size:11px" onclick="dcEntryTab(\''+t[0]+'\')">'+t[1]+'</button>').join('')+'</div>';
+  if(dcEntry.tab==='manual'){
+    h+='<div style="display:flex;gap:5px;margin-bottom:6px">'
+      +'<select class="form-control" style="width:88px;font-size:12px" onchange="dcSetEntrySubj(this.value)">'
+      +subs.map(s=>'<option value="'+dcEsc(s)+'"'+(s===dcEntry.subj?' selected':'')+'>'+dcEsc(s)+'</option>').join('')+'</select>'
+      +'<input id="dc-in-text" class="form-control" style="flex:1;font-size:12px" placeholder="作业内容，如：抄写生字第5课" onkeydown="if(event.key===\'Enter\'){dcEntryAdd();}">'
+      +'<button class="btn btn-sm btn-primary" style="font-size:11px;padding:6px 10px" onclick="dcEntryAdd()">添加</button></div>';
+    h+='<div style="font-size:10px;color:var(--text3)">可连续输入多项，回车即可添加到下方清单</div>';
+  } else if(dcEntry.tab==='paste'){
+    h+='<textarea id="dc-paste" class="form-control" rows="4" style="font-size:12px" placeholder="粘贴作业清单，每行一条或用、，；分隔&#10;例：&#10;语文:抄写生字第5课&#10;数学:口算P12、改错3题&#10;背英语单词20个"></textarea>';
+    h+='<button class="btn btn-sm btn-primary" style="margin-top:6px;font-size:11px;padding:5px 10px" onclick="dcEntryParse()">⚡ 拆分并加入清单</button>';
+  } else {
+    h+='<div style="font-size:11px;color:var(--text2);margin-bottom:6px">一次可添加多张，默认属于 <b>'+dcEsc(st.name)+'</b>。若一张图里有多个学生的作业，请先拆出内容，再逐个确认归属。</div>';
+    h+='<input type="file" accept="image/*" multiple class="form-control" style="font-size:12px" onchange="dcEntryPhotos(this)">';
+    h+='<div style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11px;color:var(--text3)">识别服务：'+(ocrOn?'<span style="color:#16a34a">已配置</span>':'<span style="color:#d97706">未接入</span>')
+      +'<button class="btn btn-sm btn-ghost" style="margin-left:auto;font-size:10px;padding:2px 8px" onclick="dcOcrSetup()">⚙ 设置</button></div>';
+    if(!ocrOn) h+='<div style="font-size:10px;color:#d97706;margin-top:4px">未接入识别服务时不会自动识别，也不会用示例数据假装成功。请看原图后手动录入。</div>';
+  }
+  h+='<div style="font-size:12px;font-weight:700;margin:10px 0 4px">待确认清单（'+dcEntry.draft.items.length+' 项）</div>';
+  if(!dcEntry.draft.items.length) h+='<div style="font-size:11px;color:var(--text3);padding:8px 0">还没有内容，先用上面的方式添加</div>';
+  dcEntry.draft.items.forEach((it,i)=>{
+    h+='<div style="border:1px solid var(--border);border-radius:9px;padding:7px 8px;margin-bottom:6px">'
+      +'<div style="display:flex;gap:5px;align-items:center">'
+      +'<input type="checkbox" class="dc-dsel" data-i="'+i+'" style="width:auto">'
+      +'<select class="form-control" style="width:78px;font-size:11px;padding:4px" onchange="dcEntryEdit('+i+',\'s\',this.value)">'
+      +dcAllSubjects().map(s=>'<option value="'+dcEsc(s)+'"'+(s===it.s?' selected':'')+'>'+dcEsc(s)+'</option>').join('')
+      +(dcAllSubjects().indexOf(it.s)<0?'<option value="'+dcEsc(it.s)+'" selected>'+dcEsc(it.s||'未分科')+'</option>':'')+'</select>'
+      +'<button class="btn btn-sm btn-ghost" style="margin-left:auto;font-size:10px;padding:2px 6px" onclick="dcEntrySplit('+i+')">拆分</button>'
+      +'<button class="btn btn-sm btn-ghost" style="font-size:10px;padding:2px 6px;color:#dc2626" onclick="dcEntryDel('+i+')">✕</button></div>'
+      +'<textarea class="form-control" rows="2" style="margin-top:5px;font-size:12px" onchange="dcEntryEdit('+i+',\'text\',this.value)">'+dcEsc(it.text||'')+'</textarea>'
+      +'<div style="display:flex;gap:6px;align-items:center;margin-top:4px;font-size:10px;color:var(--text3)">'
+      +'<label style="display:flex;align-items:center;gap:3px"><input type="checkbox" style="width:auto"'+(it.uncertain?' checked':'')+' onchange="dcEntryEdit('+i+',\'uncertain\',this.checked)">标记待核对</label>'
+      +'<span style="margin-left:auto">进入后默认为「未完成」，可再逐项检查</span></div></div>';
+  });
+  if(dcEntry.draft.items.length) h+='<div style="display:flex;gap:5px;margin-bottom:6px"><button class="btn btn-sm btn-ghost" style="font-size:11px;padding:4px 8px" onclick="dcEntryMerge()">合并勾选项</button></div>';
+  if((dcEntry.draft.photos||[]).length){
+    h+='<div style="font-size:12px;font-weight:700;margin:8px 0 4px">照片（'+dcEntry.draft.photos.length+'）</div><div style="display:flex;gap:6px;flex-wrap:wrap">'
+      +dcEntry.draft.photos.map((p,i)=>'<div style="position:relative"><img src="'+p.data+'" style="width:60px;height:60px;object-fit:cover;border-radius:8px;border:1px solid var(--border)" onclick="dcEntryViewPhoto('+i+')">'
+      +'<button class="btn btn-sm btn-ghost" style="position:absolute;right:-4px;top:-4px;font-size:9px;padding:0 4px;background:#fff;color:#dc2626" onclick="dcEntryDelPhoto('+i+')">✕</button></div>').join('')+'</div>';
+  }
+  const n=dcEntry.draft.items.length;
+  const footer='<button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="closeModal()">关闭</button>'
+    +'<button class="btn btn-primary" style="flex:2;font-size:12px" onclick="dcEntryCommit(false)"'+(n?'':' disabled')+'>添加到'+dcEsc(st.name)+'的今日作业'+(n?'（'+n+'项）':'')+'</button>';
+  const extra='<div style="display:flex;gap:5px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">'
+    +'<button class="btn btn-sm btn-ghost" style="flex:1;font-size:11px" onclick="dcEntryCommit(true)">保存并录下一位</button>'
+    +'<button class="btn btn-sm btn-ghost" style="flex:1;font-size:11px" onclick="dcEntryMulti()">添加给多人</button>'
+    +'<button class="btn btn-sm btn-ghost" style="flex:1;font-size:11px" onclick="dcCopyFrom()">复制他人</button>'
+    +'<button class="btn btn-sm btn-ghost" style="flex:1;font-size:11px" onclick="dcTemplateMenu()">模板</button></div>';
+  openModal(h+extra,footer);
+  setSheetTitle('录入作业 · '+st.name);
+}
+function dcEntryAdd(){
+  const el=$('#dc-in-text'); if(!el) return;
+  const t=(el.value||'').trim(); if(!t){ toast('请输入作业内容'); return; }
+  dcEntry.draft.items.push({s:dcEntry.subj||'',text:t,st:'todo',note:'',uncertain:false});
+  el.value=''; dcDraftPut(); dcRenderEntry();
+  const n=$('#dc-in-text'); if(n) n.focus();
+}
+const DC_SUBJECT_HINTS={
+ '语文':['抄写','生字','听写','古诗','背诵','课文','拼音','造句','日记','作文','阅读','字帖','组词','笔画','笔顺'],
+ '数学':['口算','竖式','应用题','计算题','练习册','奥数','速算','乘法','除法'],
+ '英语':['单词','默写','背单词','字母','音标','跟读','绘本','句型']
+};
+function dcInferSubject(t){
+  const t2=t.replace(/^[\s：:.,、。]+/,'');
+  const subs=dcAllSubjects();
+  for(const s of subs){ if(t2.indexOf(s)===0) return {subj:s,task:t2.slice(s.length).replace(/^[\s：:.,、。]+/,'')}; }
+  for(const s of subs){ const i=t2.indexOf(s); if(i>=0&&i<=6) return {subj:s,task:(t2.slice(0,i)+t2.slice(i+s.length)).replace(/^[\s：:.,、。]+/,'')}; }
+  for(const k in DC_SUBJECT_HINTS){ if(DC_SUBJECT_HINTS[k].some(kw=>t2.indexOf(kw)>=0)) return {subj:k,task:t2}; }
+  return null;
+}
+function dcEntryParse(){
+  const el=$('#dc-paste'); if(!el) return;
+  const raw=(el.value||'').trim(); if(!raw){ toast('请先粘贴作业内容'); return; }
+  const frags=raw.split(/[\n\r;；,，。、！!？?\t]+/).map(x=>x.trim()).filter(Boolean);
+  if(!frags.length){ toast('没有可识别的内容'); return; }
+  let ok=0, last=''; const unk=[];
+  frags.forEach(f=>{
+    const m=dcInferSubject(f);
+    if(m){ dcEntry.draft.items.push({s:m.subj,text:m.task||f,st:'todo',note:'',uncertain:false}); last=m.subj; ok++; }
+    else if(last){
+      // 换行/分号隔开的下一行默认属于同一科目的另一项作业，独立成条（可后续合并）
+      dcEntry.draft.items.push({s:last,text:f,st:'todo',note:'',uncertain:false}); ok++;
     } else {
-      html+='<div class="card" style="text-align:center;color:#16a34a;font-size:12px;padding:20px">✓ 所有学生都到班了</div>';
+      dcEntry.draft.items.push({s:'',text:f,st:'todo',note:'',uncertain:true}); unk.push(f);
+    }
+  });
+  el.value='';
+  dcDraftPut(); dcRenderEntry();
+  toast(ok?('✓ 已拆成 '+ok+' 项'+(unk.length?'，其中 '+unk.length+' 项没认出科目（已标「待核对」，可手动改）':'')):'没认出科目，已在清单里列出，请手动补充科目');
+}
+function dcEntryEdit(i,f,v){
+  if(!dcEntry||!dcEntry.draft.items[i]) return;
+  dcEntry.draft.items[i][f]=v; dcDraftPut();
+  if(f==='uncertain') dcRenderEntry();
+}
+function dcEntryDel(i){ if(!dcEntry) return; dcEntry.draft.items.splice(i,1); dcDraftPut(); dcRenderEntry(); }
+function dcEntrySplit(i){
+  if(!dcEntry||!dcEntry.draft.items[i]) return;
+  const it=dcEntry.draft.items[i];
+  const parts=(it.text||'').split(/[、，,；;\n]+/).map(x=>x.trim()).filter(Boolean);
+  if(parts.length<2){ toast('没有可拆分的分隔符（、，；或换行）'); return; }
+  const arr=parts.map(p=>Object.assign({},it,{text:p}));
+  dcEntry.draft.items.splice(i,1,...arr); dcDraftPut(); dcRenderEntry(); toast('✓ 已拆成 '+parts.length+' 项');
+}
+function dcEntryMerge(){
+  const boxes=[...document.querySelectorAll('.dc-dsel:checked')];
+  if(boxes.length<2){ toast('请勾选两项以上再合并'); return; }
+  const idx=boxes.map(b=>+b.dataset.i).sort((a,b)=>a-b);
+  const texts=idx.map(i=>dcEntry.draft.items[i].text).filter(Boolean);
+  const base=Object.assign({},dcEntry.draft.items[idx[0]]);
+  base.text=texts.join('、');
+  for(let k=idx.length-1;k>=0;k--) dcEntry.draft.items.splice(idx[k],1);
+  dcEntry.draft.items.push(base); dcDraftPut(); dcRenderEntry(); toast('✓ 已合并 '+idx.length+' 项');
+}
+function dcEntryViewPhoto(i){
+  if(!dcEntry||!dcEntry.draft.photos[i]) return;
+  openModal('<img src="'+dcEntry.draft.photos[i].data+'" style="width:100%;border-radius:8px">','<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button>');
+  setSheetTitle('查看原图');
+}
+function dcEntryDelPhoto(i){ if(!dcEntry) return; dcEntry.draft.photos.splice(i,1); dcDraftPut(); dcRenderEntry(); }
+function dcCompressImage(file,maxW,q){
+  return new Promise((res,rej)=>{
+    const fr=new FileReader();
+    fr.onload=()=>{ const img=new Image();
+      img.onload=()=>{
+        const sc=Math.min(1,(maxW||900)/img.width);
+        const c=document.createElement('canvas');
+        c.width=Math.round(img.width*sc); c.height=Math.round(img.height*sc);
+        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+        res(c.toDataURL('image/jpeg',q||0.65));
+      };
+      img.onerror=()=>rej(new Error('图片读取失败'));
+      img.src=fr.result;
+    };
+    fr.onerror=()=>rej(new Error('文件读取失败'));
+    fr.readAsDataURL(file);
+  });
+}
+function dcStorageWarn(){
+  try{ let n=0; for(const k in localStorage) n+=(localStorage.getItem(k)||'').length;
+    if(n>4.2*1024*1024) toast('⚠️ 本地存储接近上限，建议删除旧的作业照片'); }catch(e){}
+}
+async function dcEntryPhotos(inp){
+  const files=[...(inp.files||[])]; if(!files.length) return;
+  const st=DB.data.students[dcEntry.sid];
+  if(!confirm('这 '+files.length+' 张图片将归到「'+st.name+'」名下。\n若图片里包含多名学生的作业，请稍后在清单里手动拆分、分别确认归属。\n继续？')) { inp.value=''; return; }
+  toast('正在处理图片...');
+  for(const f of files){
+    try{
+      const data=await dcCompressImage(f);
+      dcEntry.draft.photos.push({data:data,name:f.name||'照片',ts:now()});
+    }catch(e){ toast('图片处理失败：'+e.message); }
+  }
+  inp.value='';
+  const ocrOn=!!((DB.data.settings||{}).ocrUrl);
+  if(ocrOn){
+    toast('正在识别...');
+    for(const p of dcEntry.draft.photos.slice()){
+      if(p._tried) continue; p._tried=true;
+      try{
+        const items=await dcOcrCall(p.data);
+        items.forEach(x=>dcEntry.draft.items.push({s:x.subj||'',text:x.task||'',st:'todo',note:'',uncertain:!!x.uncertain}));
+        toast('✓ 识别完成，请核对');
+      }catch(e){ toast('识别失败：'+e.message+'（原图已保留，可重试或手动录入）'); }
     }
   } else {
-    const groups={};
-    students.forEach(s=>{ const g=gradeGroup(s.grade); if(!groups[g]) groups[g]=[]; groups[g].push(s); });
-    DC_GROUPS.forEach(g=>{
-      const list=groups[g]; if(!list||!list.length) return;
-      const recorded=list.filter(s=>recMap[s.id]); const un=list.filter(s=>!recMap[s.id]);
-      html+='<div class="card-h" style="margin:6px 0 8px"><h3>'+(g==='小学'?'🎒':g==='初中'?'📘':'📕')+' '+g+(recorded.length?'<span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:6px">'+recorded.length+'/'+list.length+' 已记录</span>':'')+'</h3></div>';
-      recorded.forEach(s=>{ html+=dcCardHtml(s,recMap[s.id]); });
-      if(un.length){
-        html+='<button class="btn btn-ghost" style="width:100%;font-size:11px;padding:6px;margin-bottom:6px;color:var(--text3)" onclick="toggleDcUn()">'+(dcUnShown?'▾ 收起':'▸ 展开')+'未记录学生（'+un.length+'）</button>';
-        if(dcUnShown){
-          html+='<div style="display:grid;grid-template-columns:repeat('+Math.min(4,un.length)+',1fr);gap:6px;margin-bottom:6px">'+un.map(s=>'<button class="btn btn-ghost" style="font-size:12px;padding:10px 4px;display:flex;flex-direction:column;gap:2px" onclick="openDcEdit(\''+s.id+'\')"><span style="font-weight:600">'+s.name+'</span><span style="font-size:10px;color:var(--text3)">'+(s.grade||'未分年级')+'</span></button>').join('')+'</div>';
-        }
-      }
+    toast('未接入识别服务，'+files.length+' 张原图已保留，请对照图片手动录入');
+  }
+  dcDraftPut(); dcStorageWarn(); dcRenderEntry();
+}
+function dcOcrSetup(){
+  const st=DB.data.settings||{};
+  const url=prompt('图片识别服务地址（POST JSON {"image":"dataURL"}，返回 {items:[{s,text,uncertain}]} 或 {text:"..."}）\n留空则不使用识别：', st.ocrUrl||'');
+  if(url===null) return;
+  if(!DB.data.settings) DB.data.settings={};
+  DB.data.settings.ocrUrl=url.trim();
+  if(url.trim()){
+    const key=prompt('如需密钥，填写 Authorization: Bearer 的值（可留空）：', st.ocrKey||'');
+    if(key!==null) DB.data.settings.ocrKey=key.trim();
+  }
+  DB.save(); dcRenderEntry();
+  toast(DB.data.settings.ocrUrl?'✓ 已配置识别服务':'已停用识别服务');
+}
+async function dcOcrCall(dataUrl){
+  const st=DB.data.settings||{};
+  const headers={'Content-Type':'application/json'};
+  if(st.ocrKey) headers['Authorization']='Bearer '+st.ocrKey;
+  const resp=await fetchWithTimeout(st.ocrUrl,{method:'POST',headers:headers,body:JSON.stringify({image:dataUrl})},30000);
+  if(!resp.ok) throw new Error('HTTP '+resp.status);
+  const j=await resp.json();
+  let raw=[];
+  if(Array.isArray(j.items)) raw=j.items;
+  else if(Array.isArray(j.results)) raw=j.results;
+  else if(typeof j.text==='string') raw=j.text.split(/\n+/);
+  else throw new Error('返回格式不支持');
+  return raw.map(x=> typeof x==='string'
+    ? (dcInferSubject(x)||{subj:'',task:x})
+    : {subj:x.s||x.subject||'',task:x.text||x.task||x.content||'',uncertain:!!(x.uncertain||x.low_confidence)});
+}
+function dcNextUnfinished(sid){
+  const stus=dcTodayStudents(); const recs=getDaycareRecords(dcDate);
+  const map={}; recs.forEach(r=>map[r.studentId]=r);
+  const i=stus.findIndex(s=>s.id===sid);
+  for(let k=1;k<=stus.length;k++){
+    const s=stus[(i+k)%stus.length];
+    const r=map[s.id];
+    if(!r || (!dcItems(r).length && !r.noHw)) return s.id;
+  }
+  return sid;
+}
+function dcEntryCommit(next){
+  if(dcBusy) return;
+  const sid=dcEntry.sid, date=dcEntry.date;
+  const items=dcEntry.draft.items;
+  if(!items.length){ toast('清单为空'); return; }
+  const st=DB.data.students[sid];
+  if(st&&st.dcQuota>0&&!findDaycareRecord(sid,date)&&dcUsedQuota(sid)>=st.dcQuota&&!confirm('「'+st.name+'」的次数包已用完（'+st.dcQuota+'次）。仍要记录？')) return;
+  dcBusy=true;
+  const r=dcEnsureRecord(sid,date,'');
+  let added=0;
+  items.forEach(it=>{
+    if(!(it.text||'').trim() && !it.s) return;
+    r.items.push({id:uid(),s:it.s||'',text:(it.text||'').trim(),st:'todo',note:'',uncertain:!!it.uncertain});
+    added++;
+  });
+  (dcEntry.draft.photos||[]).forEach(p=>{ if(!r.photos) r.photos=[]; r.photos.push({data:p.data,name:p.name,ts:p.ts||now()}); });
+  r.updatedAt=now(); DB.save();
+  const T=dcTable('dcDraft'); delete T[dcDraftKey(sid,date)]; DB.save();
+  dcBusy=false; dcStorageWarn();
+  if(next){
+    const nid=dcNextUnfinished(sid);
+    const d=dcDraftGet(nid,date);
+    dcEntry={sid:nid,date:date,tab:dcEntry.tab,subj:dcHwSubjects(nid)[0]||'语文',draft:d,sel:{}};
+    dcRenderEntry();
+    toast('✓ 已保存 '+added+' 项，已切换到下一位（草稿独立）');
+    renderDaycare();
+  } else {
+    closeModal(); dcOpenId=sid; renderDaycare();
+    toast('✓ 已保存 '+added+' 项到'+st.name+'的今日作业');
+  }
+}
+function dcEntryMulti(){
+  const items=dcEntry.draft.items; if(!items.length){ toast('清单为空'); return; }
+  const stus=dcTodayStudents();
+  const kw=(dcKw||'');
+  let h='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">适用于少数作业相同的学生或统一安排的任务。不同学生的作业通常不同，请勿全选。</div>';
+  h+='<input id="dc-msearch" class="form-control" style="font-size:12px;margin-bottom:6px" placeholder="🔍 搜索姓名" oninput="dcMultiFilter(this.value)">';
+  h+='<div id="dc-multi-list" class="pick-list">'+stus.map(s=>'<label class="pick-item"><input type="checkbox" class="dc-msel" value="'+s.id+'" data-name="'+dcEsc(s.name)+'"><span class="nm">'+dcEsc(s.name)+(s.grade?'（'+dcEsc(s.grade)+'）':'')+'</span></label>').join('')+'</div>';
+  h+='<div style="display:flex;gap:5px;margin-top:8px"><button class="btn btn-sm btn-ghost" style="font-size:11px" onclick="dcMultiAll(true)">全选当前筛选</button><button class="btn btn-sm btn-ghost" style="font-size:11px" onclick="dcMultiAll(false)">全部取消</button></div>';
+  h+='<div style="font-size:11px;color:var(--text2);margin-top:8px">操作日期：'+dcEntry.date+'　作业 '+items.length+' 项（追加，不覆盖已有作业）</div>';
+  const footer='<button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="dcRenderEntry()">返回</button><button class="btn btn-primary" style="flex:2;font-size:12px" onclick="dcDoAssign()">确认添加</button>';
+  openModal(h,footer); setSheetTitle('添加给多人');
+}
+function dcMultiFilter(v){
+  const kw=(v||'').trim().toLowerCase();
+  [...document.querySelectorAll('.dc-msel')].forEach(cb=>{
+    const nm=(cb.dataset.name||'').toLowerCase();
+    cb.closest('.pick-item').style.display=(!kw||nm.indexOf(kw)>=0)?'':'none';
+  });
+}
+function dcMultiAll(on){
+  [...document.querySelectorAll('.dc-msel')].forEach(cb=>{ if(cb.closest('.pick-item').style.display!=='none') cb.checked=on; });
+}
+function dcDoAssign(){
+  if(dcBusy) return;
+  const ids=[...document.querySelectorAll('.dc-msel:checked')].map(cb=>cb.value);
+  if(!ids.length){ toast('请至少选择一名学生'); return; }
+  const items=dcEntry.draft.items;
+  const btnTxt='为已选 '+ids.length+' 名学生添加 '+items.length+' 项作业';
+  if(!confirm('操作日期：'+dcEntry.date+'\n选中学生：'+ids.length+' 人\n作业内容：'+items.length+' 项\n\n'+btnTxt+'？\n（默认追加，不覆盖已有作业）')) return;
+  dcBusy=true;
+  let added=0, skipped=0, dupNames=[];
+  ids.forEach(sid=>{
+    const r=dcEnsureRecord(sid,dcEntry.date,'');
+    items.forEach(it=>{
+      const t=(it.text||'').trim(); if(!t && !it.s) return;
+      if(r.items.some(x=>x.s===(it.s||'') && x.text===t)){ skipped++; dupNames.push(DB.data.students[sid]?DB.data.students[sid].name:sid); return; }
+      r.items.push({id:uid(),s:it.s||'',text:t,st:'todo',note:'',uncertain:!!it.uncertain});
+      added++;
     });
+    r.updatedAt=now();
+  });
+  DB.save(); dcBusy=false;
+  let msg='✓ 成功添加 '+added+' 项'+(skipped?('，跳过重复 '+skipped+' 项'):'');
+  if(skipped){
+    if(confirm(msg+'\n重复出现在：'+[...new Set(dupNames)].join('、')+'\n\n点「确定」结束，点「取消」返回修改清单。')){ closeModal(); renderDaycare(); toast(msg); }
+    return;
   }
-  $('#daycare-content').innerHTML=html;
+  closeModal(); renderDaycare(); toast(msg);
 }
-function renderDcPeople(){
-  $('#dc-nav-box').innerHTML='';
-  const students=Object.values(DB.data.students).filter(s=>!s._deleted);
-  const recs=allDaycareRecords();
-  const byStu={}; recs.forEach(r=>{ if(!byStu[r.studentId]) byStu[r.studentId]=[]; byStu[r.studentId].push(r); });
-  const monthPrefix=todayStr().slice(0,7);
-  $('#daycare-stats').innerHTML=`<div class="stat-card"><div class="s-num">${recs.length}</div><div class="s-lbl">托班总记录</div></div>
-    <div class="stat-card"><div class="s-num">${Object.keys(byStu).length}</div><div class="s-lbl">参与学生</div></div>
-    <div class="stat-card"><div class="s-num">${recs.filter(r=>r.date.startsWith(monthPrefix)).length}</div><div class="s-lbl">本月记录</div></div>
-    <div class="stat-card"><div class="s-num">${new Set(recs.filter(r=>r.date.startsWith(monthPrefix)).map(r=>r.studentId)).size}</div><div class="s-lbl">本月托班学生</div></div>`;
-  const sorted=students.map(s=>({s,rs:(byStu[s.id]||[]).sort((a,b)=>b.date.localeCompare(a.date))})).sort((a,b)=>b.rs.length-a.rs.length);
-  let html='';
-  if(!sorted.length) html=`<div class="card" style="text-align:center;color:var(--text3);font-size:12px;padding:24px">暂无学生</div>`;
-  sorted.forEach(({s,rs})=>{
-    if(!rs.length){
-      html+=`<div class="card" style="padding:10px 12px;margin-bottom:6px;opacity:.55">
-        <div style="display:flex;align-items:center;gap:6px"><span style="font-weight:600;font-size:14px">${s.name}</span>${gradeTag(s.grade)}
-        <span style="margin-left:auto;font-size:11px;color:var(--text3)">暂无托班记录</span></div></div>`;
-      return;
-    }
-    const hs=hwStat(rs); const hwTotal=hs.done+hs.partial+hs.none;
-    const monthDays=rs.filter(r=>r.date.startsWith(monthPrefix)).length;
-    const durs=rs.map(dcDuration).filter(Boolean);
-    const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
-    html+=`<div class="card" style="padding:10px 12px;margin-bottom:6px" onclick="showDcPerson('${s.id}')">
-      <div style="display:flex;align-items:center;gap:6px">
-        <span style="font-weight:600;font-size:14px">${s.name}</span>${gradeTag(s.grade)}
-        <span style="margin-left:auto;font-size:11px;color:var(--text3)">最近 ${rs[0].date.slice(5)}</span>
-      </div>
-      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:5px">
-        ${dcVisitBadge(s)}
-        <span style="background:var(--primary-l);color:var(--primary);border-radius:8px;padding:1px 6px;font-size:10px">📅 ${rs.length}天 · 本月${monthDays}</span>
-        ${hwTotal?`<span style="background:#dcfce7;color:#16a34a;border-radius:8px;padding:1px 6px;font-size:10px">📚 完成率${Math.round(hs.done/hwTotal*100)}%</span>`:''}
-        ${avg?`<span style="background:#ede9fe;color:#7c3aed;border-radius:8px;padding:1px 6px;font-size:10px">⏱️ 均${fmtDcDur(avg)}</span>`:''}
-      </div>
-    </div>`;
+function dcCopyFrom(){
+  const stus=Object.values(DB.data.students||{}).filter(s=>!s._deleted);
+  const srcs=stus.map(s=>{
+    const rs=allDaycareRecords().filter(r=>r.studentId===s.id).sort((a,b)=>b.date.localeCompare(a.date));
+    const recent=rs.slice(0,3);
+    if(!recent.some(r=>dcItems(r).length)) return null;
+    return {s:s,rs:recent};
+  }).filter(Boolean);
+  if(!srcs.length){ toast('暂无可复制的作业记录'); return; }
+  let h='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">只复制作业内容，不复制完成状态、备注和照片。勾选需要的条目后确认。</div>';
+  srcs.forEach(o=>{
+    h+='<div style="font-size:12px;font-weight:600;margin:8px 0 4px">'+dcEsc(o.s.name)+'</div>';
+    o.rs.forEach(r=>{
+      if(!dcItems(r).length) return;
+      h+='<div style="font-size:10px;color:var(--text3);margin:4px 0">'+r.date.slice(5)+'</div>';
+      dcItems(r).forEach(it=>{
+        if(!(it.text||'').trim()) return;
+        h+='<label class="pick-item"><input type="checkbox" class="dc-csel" data-s="'+dcEsc(it.s||'')+'" data-t="'+dcEsc(it.text)+'"><span class="nm">'+dcEsc(it.s||'')+'：'+dcEsc(it.text)+'</span></label>';
+      });
+    });
   });
-  $('#daycare-content').innerHTML=html;
+  const footer='<button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="dcRenderEntry()">返回</button><button class="btn btn-primary" style="flex:2;font-size:12px" onclick="dcDoCopy()">加入清单</button>';
+  openModal(h,footer); setSheetTitle('复制其他学生的作业');
 }
-function renderDcPerson(studentId){
-  const s=DB.data.students[studentId];
-  if(!s||s._deleted){ dcPersonId=''; renderDcPeople(); return; }
-  const rs=allDaycareRecords().filter(r=>r.studentId===studentId).sort((a,b)=>b.date.localeCompare(a.date));
-  $('#dc-nav-box').innerHTML=`<div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
-    <button class="btn btn-sm btn-ghost" onclick="backDcPeople()">‹ 返回</button>
-    <span style="font-weight:700;font-size:15px">${s.name}</span>${gradeTag(s.grade)}
-    <button class="btn btn-sm btn-ghost" onclick="setDcQuota('${studentId}')">🎟️ 次数包</button>
-    <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="exportDcPerson('${studentId}')">📤 导出</button>
-  </div>`;
-  const hs=hwStat(rs); const hwTotal=hs.done+hs.partial+hs.none;
-  const monthPrefix=todayStr().slice(0,7);
-  const monthDays=rs.filter(r=>r.date.startsWith(monthPrefix)).length;
-  const durs=rs.map(dcDuration).filter(Boolean);
-  const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
-  const weekSet=new Set(getWeekDates(0));
-  const weekDays=rs.filter(r=>weekSet.has(r.date)).length;
-  const qLeft=(s.dcQuota||0)?(s.dcQuota-rs.length):null;
-  $('#daycare-stats').innerHTML=`<div class="stat-card"><div class="s-num">${rs.length}</div><div class="s-lbl">总到访次数</div><div style="font-size:9px;color:var(--text3);margin-top:1px">${durs.length} 天有时长</div></div>
-    <div class="stat-card"><div class="s-num">${monthDays}</div><div class="s-lbl">本月到访</div><div style="font-size:9px;color:var(--text3);margin-top:1px">本周 ${weekDays} 次</div></div>
-    <div class="stat-card"><div class="s-num">${hwTotal?Math.round(hs.done/hwTotal*100)+'%':'—'}</div><div class="s-lbl">作业完成率</div><div style="font-size:9px;color:var(--text3);margin-top:1px">✓${hs.done} ◐${hs.partial} ✗${hs.none}</div></div>
-    ${qLeft!==null?`<div class="stat-card"><div class="s-num" style="color:${qLeft<=0?'#dc2626':(qLeft<=3?'#d97706':'#16a34a')}">${qLeft}</div><div class="s-lbl">🎟️ 剩余次数</div><div style="font-size:9px;color:var(--text3);margin-top:1px">共 ${s.dcQuota} 次</div></div>`
-    :`<div class="stat-card"><div class="s-num" style="font-size:15px;line-height:26px">${fmtDcDur(avg)}</div><div class="s-lbl">平均托管时长</div><div style="font-size:9px;color:var(--text3);margin-top:1px">未设次数包</div></div>`}`;
-  const subjStat={};
-  rs.forEach(r=>(r.homework||[]).forEach(h=>{ if(!subjStat[h.s]) subjStat[h.s]={done:0,partial:0,none:0}; if(subjStat[h.s][h.st]!==undefined) subjStat[h.s][h.st]++; }));
-  const subjKeys=Object.keys(subjStat).sort();
-  // 本月托班日历（绿=作业全完成 黄=有部分/未做 红=全未做 蓝=仅到班未记作业）
-  const md=getMonthDates(0);
-  const recByDate={}; rs.forEach(r=>{ if(!recByDate[r.date]) recByDate[r.date]=r; });
-  let calCells='';
-  md.dates.forEach(d=>{
-    const r=recByDate[d.date];
-    const isToday=d.date===todayStr();
-    let bg='#f0f1f3', sub='';
-    if(r){
-      const h=hwStat([r]); const tot=h.done+h.partial+h.none;
-      if(tot>0) bg=(h.done===tot)?'#86efac':((h.done+h.partial>0)?'#fde68a':'#fca5a5');
-      else bg='#bfdbfe';
-      const dur=dcDuration(r);
-      sub=dur>=60?(Math.round(dur/60)+'h'):(dur?dur+'m':'✓');
-    }
-    calCells+=`<div style="height:22px;border-radius:3px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:${bg};${d.other?'opacity:.25;':''}${isToday?'box-shadow:0 0 0 1px var(--red);':''}${r?'cursor:pointer;':''}" ${r?`onclick="openDcEdit('${studentId}','${r.id}')"`:''}>${r?`<span style="font-size:6px;line-height:1;opacity:.85">${parseInt(d.date.slice(8))}</span><span style="font-size:8px;line-height:1.2;font-weight:700;color:#333">${sub}</span>`:`<span style="font-size:7px;line-height:1;color:var(--text3)">${parseInt(d.date.slice(8))}</span>`}</div>`;
+function dcDoCopy(){
+  const boxes=[...document.querySelectorAll('.dc-csel:checked')];
+  if(!boxes.length){ toast('请勾选要复制的作业'); return; }
+  boxes.forEach(b=>dcEntry.draft.items.push({s:b.dataset.s||'',text:b.dataset.t||'',st:'todo',note:'',uncertain:false}));
+  dcDraftPut(); dcRenderEntry(); toast('✓ 已复制 '+boxes.length+' 项（仅内容）');
+}
+function dcTemplateMenu(){
+  const T=dcTable('dcTemplates'); const keys=Object.keys(T);
+  let h='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">模板不会每天自动派发，使用前仍需确认。</div>';
+  if(!keys.length) h+='<div style="font-size:11px;color:var(--text3);padding:8px 0">还没有模板</div>';
+  keys.forEach(k=>{
+    const t=T[k];
+    h+='<div style="display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:9px;padding:7px 8px;margin-bottom:6px">'
+      +'<div style="flex:1"><div style="font-size:12px;font-weight:600">'+dcEsc(t.name)+'</div><div style="font-size:10px;color:var(--text3)">'+((t.items||[]).map(x=>(x.s?x.s+'：':'')+x.text).join('、')||'')+'</div></div>'
+      +'<button class="btn btn-sm btn-ghost" style="font-size:10px;padding:3px 8px" onclick="dcUseTemplate(\''+k+'\')">使用</button>'
+      +'<button class="btn btn-sm btn-ghost" style="font-size:10px;padding:3px 6px;color:#dc2626" onclick="dcDelTemplate(\''+k+'\')">✕</button></div>';
   });
-  let html=`<div class="card" style="margin-bottom:10px;padding:12px">
-    <div style="font-size:12px;font-weight:600;margin-bottom:6px">📅 ${md.monthLabel} 托班日历</div>
-    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;margin-bottom:2px">${['一','二','三','四','五','六','日'].map(w=>`<div style="text-align:center;font-size:8px;color:var(--text3);height:12px;line-height:12px">${w}</div>`).join('')}</div>
-    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px">${calCells}</div>
-    <div style="display:flex;gap:6px;margin-top:6px;font-size:9px;color:var(--text3);align-items:center;flex-wrap:wrap">
-      <span style="width:10px;height:10px;border-radius:2px;background:#86efac;display:inline-block"></span>全完成
-      <span style="width:10px;height:10px;border-radius:2px;background:#fde68a;display:inline-block"></span>部分
-      <span style="width:10px;height:10px;border-radius:2px;background:#fca5a5;display:inline-block"></span>未做
-      <span style="width:10px;height:10px;border-radius:2px;background:#bfdbfe;display:inline-block"></span>仅到班
-    </div>
-  </div>`;
-  if(subjKeys.length){
-    html+=`<div class="card-h" style="margin:6px 0 8px"><h3>📚 作业统计（按科目）</h3></div><div class="card" style="padding:0;margin-bottom:10px;overflow:hidden"><table style="width:100%;border-collapse:collapse;font-size:12px">
-      <tr style="background:var(--bg)"><th style="padding:8px;text-align:left">科目</th><th style="padding:8px">✓完成</th><th style="padding:8px">◐部分</th><th style="padding:8px">✗未做</th><th style="padding:8px">完成率</th></tr>
-      ${subjKeys.map(k=>{const v=subjStat[k];const tot=v.done+v.partial+v.none;return `<tr style="border-top:1px solid var(--border)"><td style="padding:8px;font-weight:600">${k}</td><td style="padding:8px;text-align:center;color:#16a34a">${v.done}</td><td style="padding:8px;text-align:center;color:#d97706">${v.partial}</td><td style="padding:8px;text-align:center;color:#dc2626">${v.none}</td><td style="padding:8px;text-align:center;font-weight:600">${Math.round(v.done/tot*100)}%</td></tr>`;}).join('')}
-    </table></div>`;
-  }
-  html+=`<div class="card-h" style="margin:6px 0 8px"><h3>📋 托班记录（${rs.length}天）</h3></div>`;
-  if(!rs.length) html+=`<div class="card" style="text-align:center;color:var(--text3);font-size:12px;padding:24px">暂无托班记录</div>`;
-  rs.slice(0,30).forEach(r=>{
-    const dur=dcDuration(r);
-    html+=`<div class="card" style="padding:10px 12px;margin-bottom:6px" onclick="openDcEdit('${studentId}','${r.id}')">
-      <div style="display:flex;align-items:center;gap:6px">
-        <span style="font-weight:600;font-size:13px">${r.date.slice(5)} 周${DC_WD[dayOfWeek(r.date)]}</span>
-        <span style="font-size:11px;color:var(--text2)">${r.arrive||'--:--'} ~ ${r.leave||'--:--'}${dur?' · '+fmtDcDur(dur):''}</span>
-      </div>
-      ${hwChips(r)?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:5px">${hwChips(r)}</div>`:''}
-      ${hwTasksHtml(r)}
-      ${r.note?`<div style="font-size:11px;color:var(--text3);margin-top:4px">📝 ${r.note}</div>`:''}
-    </div>`;
-  });
-  if(rs.length>30) html+=`<div style="text-align:center;font-size:11px;color:var(--text3);padding:8px">仅显示最近30天记录</div>`;
-  $('#daycare-content').innerHTML=html;
+  const footer='<button class="btn btn-ghost" style="flex:1;font-size:11px" onclick="dcRenderEntry()">返回</button><button class="btn btn-primary" style="flex:2;font-size:12px" onclick="dcSaveTemplate()">把当前清单存为模板</button>';
+  openModal(h,footer); setSheetTitle('作业模板');
 }
-function svSubjectFor(sid){
-  const freq={};
-  Object.values(DB.data.supervisions).filter(r=>!r._deleted&&r.studentId===sid).forEach(r=>{ const k=r.subject||''; if(k) freq[k]=(freq[k]||0)+1; });
-  const top=Object.entries(freq).sort((a,b)=>b[1]-a[1])[0];
-  if(top) return top[0];
-  const g={};
-  Object.values(DB.data.supervisions).filter(r=>!r._deleted).forEach(r=>{ const k=r.subject||''; if(k) g[k]=(g[k]||0)+1; });
-  const gt=Object.entries(g).sort((a,b)=>b[1]-a[1])[0];
-  return gt?gt[0]:'';
+function dcSaveTemplate(){
+  if(!dcEntry.draft.items.length){ toast('清单为空'); return; }
+  const nm=(prompt('模板名称，如：三年级常规作业','')||'').trim();
+  if(!nm) return;
+  const T=dcTable('dcTemplates'); const id=uid();
+  T[id]={id:id,name:nm,items:dcEntry.draft.items.map(x=>({s:x.s||'',text:x.text||''})),updatedAt:now()};
+  DB.save(); toast('✓ 已存为模板'); dcTemplateMenu();
 }
-function dcLinkSv(sid,date,time){
-  const subj=svSubjectFor(sid);
-  if(!subj) return false;
-  const dup=Object.values(DB.data.supervisions).some(r=>!r._deleted&&r.studentId===sid&&r.date===date&&r.subject===subj);
-  if(dup) return false;
-  const t=now(); const id=uid();
-  DB.data.supervisions[id]={id,studentId:sid,subject:subj,date,time:time||'',note:'托班到班联动',vocab:0,spell:0,listening:false,speaking:false,createdAt:t,updatedAt:t};
-  return true;
+function dcDelTemplate(k){ const T=dcTable('dcTemplates'); delete T[k]; DB.save(); dcTemplateMenu(); }
+function dcUseTemplate(k){
+  const t=dcTable('dcTemplates')[k]; if(!t) return;
+  (t.items||[]).forEach(x=>dcEntry.draft.items.push({s:x.s||'',text:x.text||'',st:'todo',note:'',uncertain:false}));
+  dcDraftPut(); dcRenderEntry(); toast('✓ 已载入模板「'+t.name+'」，请确认后再添加');
 }
+
+/* ==================== 到离班 ==================== */
 function openDcQuick(){
-  const students=Object.values(DB.data.students).filter(s=>!s._deleted);
-  if(!students.length){ toast('请先在「我的」页面添加学生'); return; }
-  const groups={};
-  students.forEach(s=>{ const g=gradeGroup(s.grade); if(!groups[g]) groups[g]=[]; groups[g].push(s); });
-  let html=`<div class="form-row"><label>日期</label><input type="date" class="form-control" id="dcq-date" value="${dcDate}"></div>`;
-  html+=`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);margin:6px 0 2px"><input type="checkbox" id="dcq-sv" checked style="width:auto">📍 同时记录督学来访（各学生常用科目）</label>`;
-  DC_GROUPS.forEach(g=>{
-    if(!groups[g]||!groups[g].length) return;
-    html+=`<div style="font-size:12px;font-weight:600;color:var(--text2);margin:8px 0 4px">${g}（${groups[g].length}人）</div>
-    <div class="pick-list">${groups[g].map(s=>`<label class="pick-item"><input type="checkbox" class="dcq-stu" value="${s.id}"><span class="nm">${s.name}${s.grade?' ('+s.grade+')':''}</span></label>`).join('')}</div>`;
+  const kw='';
+  let h='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">已到班的学生不会重复记录；到班即加入今日名单。</div>';
+  h+='<input id="dc-qsearch" class="form-control" style="font-size:12px;margin-bottom:6px" placeholder="🔍 搜索姓名" oninput="dcQuickFilter(this.value)">';
+  const stus=Object.values(DB.data.students||{}).filter(s=>!s._deleted).sort((a,b)=>a.name.localeCompare(b.name,'zh'));
+  const recs=getDaycareRecords(dcDate); const rm={}; recs.forEach(r=>rm[r.studentId]=r);
+  h+='<div class="pick-list">'+stus.map(s=>{
+    const r=rm[s.id];
+    return '<label class="pick-item" data-name="'+dcEsc(s.name)+'"><input type="checkbox" class="dc-qsel" value="'+s.id+'"'+(r?' checked disabled':'')+'><span class="nm">'+dcEsc(s.name)+(s.grade?'（'+dcEsc(s.grade)+'）':'')+(r?' <span style="color:#16a34a;font-size:10px">已到班</span>':'')+'</span></label>';
+  }).join('')+'</div>';
+  h+='<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);margin-top:8px"><input type="checkbox" id="dc-qsv" checked style="width:auto">📍 同时记录督学来访</label>';
+  const footer='<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="saveDcQuick()">✓ 记录到班</button>';
+  openModal(h,footer); setSheetTitle('批量到班（'+(+dcDate.slice(5,7))+'月'+(+dcDate.slice(8))+'日）');
+}
+function dcQuickFilter(v){
+  const kw=(v||'').trim().toLowerCase();
+  [...document.querySelectorAll('.pick-item')].forEach(el=>{
+    const nm=(el.dataset.name||'').toLowerCase();
+    el.style.display=(!kw||nm.indexOf(kw)>=0)?'':'none';
   });
-  const footer=`<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="saveDcQuick()">✓ 记录到班</button>`;
-  openModal(html,footer); setSheetTitle('🏫 批量记录到班');
 }
 function saveDcQuick(){
-  const date=$('#dcq-date').value||dcDate;
-  const ids=[...document.querySelectorAll('.dcq-stu:checked')].map(cb=>cb.value);
-  if(!ids.length){ toast('请至少选择一个学生'); return; }
-  const linkSv=$('#dcq-sv')?$('#dcq-sv').checked:true;
-  const over=ids.filter(sid=>{ const stu=DB.data.students[sid]; return stu&&stu.dcQuota>0&&!findDaycareRecord(sid,date)&&dcUsedQuota(sid)>=stu.dcQuota; }).map(sid=>DB.data.students[sid].name);
+  if(dcBusy) return;
+  const time=new Date().toTimeString().slice(0,5);
+  const ids=[...document.querySelectorAll('.dc-qsel:checked')].filter(cb=>!cb.disabled).map(cb=>cb.value);
+  if(!ids.length){ toast('请选择尚未到班的学生'); return; }
+  const linkSv=$('#dcq-sv')?$('#dcq-sv').checked:($('#dc-qsv')?$('#dc-qsv').checked:true);
+  const over=ids.filter(sid=>{ const st=DB.data.students[sid]; return st&&st.dcQuota>0&&dcUsedQuota(sid)>=st.dcQuota; }).map(sid=>DB.data.students[sid].name);
   if(over.length&&!confirm('以下学生次数包已用完：'+over.join('、')+'。仍要记录到班？')) return;
-  const t=now(); const time=new Date().toTimeString().slice(0,5); const changed=[];
-  let svCount=0;
+  dcBusy=true;
+  let n=0, sv=0;
   ids.forEach(sid=>{
-    if(findDaycareRecord(sid,date)) return;
-    const id=uid();
-    DB.data.daycare[id]={id,studentId:sid,date,arrive:time,leave:'',homework:[],note:'',createdAt:t,updatedAt:t};
-    changed.push(sid);
-    if(linkSv && dcLinkSv(sid,date,time)) svCount++;
+    if(findDaycareRecord(sid,dcDate)) return;
+    const r=dcEnsureRecord(sid,dcDate,time);
+    if(!r.arrive) r.arrive=time;
+    r.updatedAt=now(); n++;
+    if(linkSv && dcLinkSv(sid,dcDate,time)) sv++;
   });
-  if(!changed.length){ toast('所选学生当天已有记录'); return; }
-  DB.save(); closeModal(); dcDate=date; renderDaycare(); toast(`✓ 已记录 ${changed.length} 名学生到班（${time}）${svCount?`，同步督学来访 ${svCount} 条`:''}`);
+  DB.save(); dcBusy=false; closeModal(); renderDaycare();
+  toast('✓ 已记录 '+n+' 名学生到班（'+time+'）'+(sv?'，同步督学来访 '+sv+' 条':''));
 }
-function dcTaskSuggestions(subj){
-  const seen=new Set(); const list=[];
-  allDaycareRecords().slice().sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0)).forEach(r=>(r.homework||[]).forEach(h=>{
-    if(h.s===subj&&h.task&&!seen.has(h.task)){ seen.add(h.task); list.push(h.task); }
-  }));
-  return list.slice(0,10);
-}
-function dcHwRow(subj,h){
-  const st=(h&&h.st)||'';
-  const hasNote=!!((h&&h.note)||'');
-  const hasTask=!!((h&&h.task)||'');
-  const sug=dcTaskSuggestions(subj);
-  return `<div class="dc-hw-row" data-subject="${subj}" data-status="${st}" style="padding:6px 0;border-bottom:1px dashed var(--border)">
-    <div style="display:flex;align-items:center;gap:5px">
-      <span style="width:48px;font-size:13px;font-weight:600;flex-shrink:0">${subj}</span>
-      ${DC_STATUS.map(x=>`<button class="btn btn-sm btn-ghost dc-hw-btn" data-st="${x.k}" onclick="setDcHwStatus(this)" style="font-size:11px;padding:4px 8px;${st===x.k?`border-color:${x.c};color:${x.c};background:${x.bg}`:''}">${x.t.slice(0,1)}</button>`).join('')}
-      <button class="btn btn-sm btn-ghost" type="button" style="font-size:11px;padding:4px 7px;margin-left:auto;${(hasNote||hasTask)?'color:#d97706;border-color:#d9770660':''}" onclick="toggleDcHwNote(this)" title="作业内容/备注">📝</button>
-    </div>
-    <input class="form-control dc-hw-task" list="dc-sug-${subj}" style="margin-top:5px;font-size:12px;${(hasTask||st)?'':'display:none'}" placeholder="作业内容，如：抄写生字第5课 / 口算P12" value="${((h&&h.task)||'').replace(/"/g,'&quot;')}">
-    <datalist id="dc-sug-${subj}">${sug.map(x=>`<option value="${x.replace(/"/g,'&quot;')}">`).join('')}</datalist>
-    <input class="form-control dc-hw-note" style="margin-top:5px;font-size:12px;${hasNote?'':'display:none'}" placeholder="备注(可选)，如：还剩口算一页" value="${((h&&h.note)||'').replace(/"/g,'&quot;')}">
-  </div>`;
-}
-function toggleDcHwNote(btn){
-  const row=btn.closest('.dc-hw-row');
-  const t=row.querySelector('.dc-hw-task');
-  const n=row.querySelector('.dc-hw-note');
-  const show=n?n.style.display==='none':(t?t.style.display==='none':false);
-  if(t) t.style.display=show?'':'none';
-  if(n) n.style.display=show?'':'none';
-  btn.style.color=show?'#d97706':'';
-  btn.style.borderColor=show?'#d9770660':'';
-  if(show){ (t&&!t.value?t:(n||t)).focus(); }
-}
-function hwTasksHtml(rec){
-  const items=(rec.homework||[]).filter(h=>h.task);
-  if(!items.length) return '';
-  return '<div style="font-size:11px;color:#374151;margin-top:4px;line-height:1.6">'+items.map(h=>'<span style="color:#9ca3af">'+h.s+':</span>'+h.task).join(' · ')+'</div>';
-}
-function setDcHwStatus(btn){
-  const row=btn.closest('.dc-hw-row');
-  const newSt=row.dataset.status===btn.dataset.st?'':btn.dataset.st;
-  row.dataset.status=newSt;
-  row.querySelectorAll('.dc-hw-btn').forEach(b=>{
-    const x=DC_STATUS.find(s=>s.k===b.dataset.st);
-    if(x.k===newSt){ b.style.borderColor=x.c; b.style.color=x.c; b.style.background=x.bg; }
-    else { b.style.borderColor=''; b.style.color=''; b.style.background=''; }
-  });
-}
-function addDcHwRow(){
-  const name=prompt('科目名称（如：道法、物理、地理）');
-  if(!name||!name.trim()) return;
-  const nm=name.trim();
-  if(dcAllSubjects().includes(nm)){ toast('该科目已存在'); return; }
-  $('#dc-hw-list').insertAdjacentHTML('beforeend',dcHwRow(nm,null));
-}
-function openDcEdit(studentId,editId){
-  const s=DB.data.students[studentId]; if(!s||s._deleted) return;
-  const r=(editId&&DB.data.daycare[editId])?DB.data.daycare[editId]:null;
-  const date=r?r.date:dcDate;
-  const hwMap={}; ((r&&r.homework)||[]).forEach(h=>hwMap[h.s]=h);
-  const allSubs=dcHwSubjects(studentId);
-  const onSubs=allSubs.filter(x=>hwMap[x]&&hwMap[x].st);
-  const offSubs=allSubs.filter(x=>!(hwMap[x]&&hwMap[x].st));
-  const headSubs=onSubs.concat(offSubs.slice(0,4));
-  const moreSubs=offSubs.slice(4);
-  let html=`<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
-    <span style="font-weight:700;font-size:16px">${s.name}</span>${gradeTag(s.grade)}
-    <span style="margin-left:auto;font-size:11px;color:var(--text3)">${r?'点击科目状态可切换/取消':''}</span>
-  </div>
-  <div class="form-row"><div style="display:flex;gap:8px">
-    <div style="flex:1"><label>日期</label><input type="date" class="form-control" id="dc-date" value="${date}"></div>
-    <div style="flex:1"><label>到班</label><input type="time" class="form-control" id="dc-arrive" value="${(r&&r.arrive)||''}"></div>
-    <div style="flex:1"><label>离班</label><input type="time" class="form-control" id="dc-leave" value="${(r&&r.leave)||''}"></div>
-  </div></div>
-  <div style="font-size:12px;font-weight:600;color:var(--text2);margin:4px 0">📋 快速登记作业 <span style="font-weight:400;color:var(--text3)">(粘贴清单自动分科目)</span></div>
-  <textarea class="form-control" id="dc-parse-in" rows="2" style="font-size:12px" placeholder="每项一行或用顿号/逗号分隔&#10;语文:抄写生字第5课&#10;数学:口算P12&#10;背英语单词20个"></textarea>
-  <button class="btn btn-sm btn-primary" style="margin-top:4px;font-size:11px;padding:4px 10px" onclick="parseDcHwText()">⚡ 识别并登记</button>
-  <div style="font-size:12px;font-weight:600;color:var(--text2);margin:6px 0 4px">📚 作业完成情况</div>
-  <div id="dc-hw-list">${headSubs.map(subj=>dcHwRow(subj,hwMap[subj])).join('')}${moreSubs.length?`<div id="dc-hw-more" style="display:none">${moreSubs.map(subj=>dcHwRow(subj,hwMap[subj])).join('')}</div>`:''}</div>
-  ${moreSubs.length?`<button class="btn btn-sm btn-ghost" style="margin-top:6px;font-size:11px;color:var(--text3)" onclick="toggleDcMore(this)">▸ 展开更多科目（${moreSubs.length}）</button>`:''}
-  <button class="btn btn-sm btn-ghost" style="margin-top:6px" onclick="addDcHwRow()">＋ 添加科目</button>
-  ${!r?`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);margin:6px 0 2px"><input type="checkbox" id="dc-sv" checked style="width:auto">📍 同时记录督学来访${svSubjectFor(studentId)?`（${svSubjectFor(studentId)}）`:''}</label>`:''}
-  <div class="form-row" style="margin-top:8px"><label>备注</label><textarea class="form-control" id="dc-note" rows="2" placeholder="今天的表现/特殊情况...">${(r&&r.note)||''}</textarea></div>`;
-  const footer=(r?`<button class="btn btn-danger" style="flex:1" onclick="delDaycareRecord('${r.id}')">删除</button>`:'')+
-    `<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="saveDaycareRecord(${r?`'${r.id}'`:''},'${studentId}')">✓ 保存</button>`;
-  openModal(html,footer); setSheetTitle(r?'✏️ 编辑托班记录':'🏫 记录托班');
-}
-function saveDaycareRecord(editId,studentId){
-  const date=$('#dc-date').value||dcDate;
-  const arrive=$('#dc-arrive').value||'';
-  const leave=$('#dc-leave').value||'';
-  const note=$('#dc-note').value.trim();
-  const homework=[];
-  document.querySelectorAll('.dc-hw-row').forEach(row=>{
-    const st=row.dataset.status;
-    const task=row.querySelector('.dc-hw-task').value.trim();
-    if(!st&&!task) return;
-    homework.push({s:row.dataset.subject,st:st||'none',task,note:row.querySelector('.dc-hw-note').value.trim()});
-  });
-  if(!arrive&&!leave&&!homework.length&&!note){ toast('请至少填写时间或作业情况'); return; }
-  if(!editId){ const stu=DB.data.students[studentId]; if(stu&&stu.dcQuota>0&&dcUsedQuota(studentId)>=stu.dcQuota&&!confirm('「'+stu.name+'」的次数包已用完（'+stu.dcQuota+'次）。仍要记录？')) return; }
-  const t=now();
-  if(editId && DB.data.daycare[editId]){
-    Object.assign(DB.data.daycare[editId],{studentId,date,arrive,leave,homework,note,updatedAt:t});
-  } else {
-    const id=uid();
-    DB.data.daycare[id]={id,studentId,date,arrive,leave,homework,note,createdAt:t,updatedAt:t};
+function batchDcLeave(){
+  if(dcBusy) return;
+  const time=new Date().toTimeString().slice(0,5);
+  const recs=getDaycareRecords(dcDate).filter(r=>!r.leave);
+  if(!recs.length){ toast('当天没有待离班的记录'); return; }
+  const bad=recs.filter(r=>{ const c=dcCounts(r); return c.todo>0||c.fix>0||c.tocheck>0; });
+  let reason='';
+  if(bad.length){
+    const names=bad.map(r=>{ const s=DB.data.students[r.studentId]; const c=dcCounts(r);
+      return (s?s.name:'?')+'（未完成'+c.todo+' 待检查'+c.tocheck+' 待订正'+c.fix+'）'; }).join('\n');
+    const ans=prompt('以下学生还有作业未完成/未订正：\n'+names+'\n\n离班不会自动把作业设为完成。\n如需记录原因（如：家长接走、明日补做），请填写；不需要请留空：','');
+    if(ans===null) return;
+    reason=ans.trim();
   }
-  const svLinked=(!editId && ($('#dc-sv')?$('#dc-sv').checked:true)) ? dcLinkSv(studentId,date,arrive) : false;
-  DB.save(); closeModal(); dcDate=date; renderDaycare();
-  toast(svLinked?'✓ 已保存托班记录，并同步督学来访':'✓ 已保存托班记录');
+  if(!confirm('为 '+recs.length+' 名学生记录离班时间 '+time+' ？')) return;
+  dcBusy=true;
+  recs.forEach(r=>{ r.leave=time; if(reason) r.leaveNote=reason; r.updatedAt=now(); });
+  DB.save(); dcBusy=false; renderDaycare(); toast('✓ 已记录 '+recs.length+' 人离班（'+time+'）');
 }
-function exportDcPerson(studentId){
-  const s=DB.data.students[studentId];
-  if(!s||s._deleted) return;
-  const rs=allDaycareRecords().filter(r=>r.studentId===studentId).sort((a,b)=>b.date.localeCompare(a.date));
-  if(!rs.length){ toast('该学生暂无托班记录'); return; }
-  toast('正在生成图片...');
-  const hs=hwStat(rs); const hwTotal=hs.done+hs.partial+hs.none;
-  const monthPrefix=todayStr().slice(0,7);
-  const monthDays=rs.filter(r=>r.date.startsWith(monthPrefix)).length;
-  const durs=rs.map(dcDuration).filter(Boolean);
-  const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
-  let html=`<div style="background:#fff;color:#1a1a1a;padding:16px;font-family:system-ui,sans-serif">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-      <div style="width:44px;height:44px;border-radius:50%;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px">${s.name.charAt(0)}</div>
-      <div><div style="font-size:17px;font-weight:700">${s.name}</div><div style="font-size:11px;color:#666">${s.grade||'—'} · 托班报告</div>${(s.dcQuota||0)?`<div style="font-size:10px;color:#d97706;margin-top:2px">🎟️ 次数包剩余 ${Math.max(0,s.dcQuota-rs.length)}/${s.dcQuota} 次</div>`:''}</div>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px">
-      <div style="background:#eff6ff;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#1d4ed8">${rs.length}</div><div style="font-size:9px;color:#666">📅 总天数</div></div>
-      <div style="background:#f0fdf4;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#16a34a">${monthDays}</div><div style="font-size:9px;color:#666">📊 本月</div></div>
-      <div style="background:#fef3c7;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#d97706">${hwTotal?Math.round(hs.done/hwTotal*100)+'%':'—'}</div><div style="font-size:9px;color:#666">📚 完成率</div></div>
-      <div style="background:#f5f3ff;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#7c3aed">${avg?fmtDcDur(avg):'—'}</div><div style="font-size:9px;color:#666">⏱️ 平均时长</div></div>
-    </div>`;
-  const subjStat={};
-  rs.forEach(r=>(r.homework||[]).forEach(h=>{ if(!subjStat[h.s]) subjStat[h.s]={done:0,partial:0,none:0}; if(subjStat[h.s][h.st]!==undefined) subjStat[h.s][h.st]++; }));
-  const subjKeys=Object.keys(subjStat).sort();
-  if(subjKeys.length){
-    html+=`<div style="font-size:13px;font-weight:600;margin-bottom:6px">📚 作业统计</div><table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px">
-      <tr style="background:#f9fafb"><th style="padding:6px;text-align:left">科目</th><th style="padding:6px">✓</th><th style="padding:6px">◐</th><th style="padding:6px">✗</th><th style="padding:6px">完成率</th></tr>
-      ${subjKeys.map(k=>{const v=subjStat[k];const tot=v.done+v.partial+v.none;return `<tr style="border-top:1px solid #e5e7eb"><td style="padding:6px;font-weight:600">${k}</td><td style="padding:6px;text-align:center;color:#16a34a">${v.done}</td><td style="padding:6px;text-align:center;color:#d97706">${v.partial}</td><td style="padding:6px;text-align:center;color:#dc2626">${v.none}</td><td style="padding:6px;text-align:center;font-weight:600">${Math.round(v.done/tot*100)}%</td></tr>`;}).join('')}
-    </table>`;
+function openDcTimeEdit(rid){
+  const r=DB.data.daycare[rid]; if(!r) return;
+  const s=DB.data.students[r.studentId];
+  const h='<div style="font-size:13px;font-weight:600;margin-bottom:8px">'+dcEsc(s?s.name:'')+' · '+r.date.slice(5)+'</div>'
+    +'<div class="form-row"><div style="display:flex;gap:8px">'
+    +'<div style="flex:1"><label>到班</label><input type="time" class="form-control" id="dc-t-arrive" value="'+dcEsc(r.arrive||'')+'"></div>'
+    +'<div style="flex:1"><label>离班</label><input type="time" class="form-control" id="dc-t-leave" value="'+dcEsc(r.leave||'')+'"></div></div></div>'
+    +'<div style="font-size:11px;color:var(--text3);margin-top:6px">离班时间需晚于到班时间；允许带未完成作业离班。</div>';
+  const footer='<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="saveDcTime(\''+rid+'\')">✓ 保存</button>';
+  openModal(h,footer); setSheetTitle('到/离班时间');
+}
+function saveDcTime(rid){
+  const r=DB.data.daycare[rid]; if(!r) return;
+  const a=($('#dc-t-arrive').value||'').trim(), l=($('#dc-t-leave').value||'').trim();
+  if(a&&l){
+    const am=a.split(':').map(Number), lm=l.split(':').map(Number);
+    if((lm[0]*60+lm[1])<=(am[0]*60+am[1])){ toast('离班时间需晚于到班时间，请修改'); return; }
   }
-  html+=`<div style="font-size:13px;font-weight:600;margin-bottom:6px">📋 最近记录</div>`;
-  rs.slice(0,10).forEach(r=>{
-    const dur=dcDuration(r);
-    const chips=hwChips(r);
-    html+=`<div style="border:1px solid #e5e7eb;border-radius:10px;padding:9px 11px;margin-bottom:6px">
-      <div style="display:flex;align-items:center;gap:6px">
-        <span style="font-size:12px;font-weight:700">${r.date.slice(5)} 周${DC_WD[dayOfWeek(r.date)]}</span>
-        <span style="margin-left:auto;font-size:10px;color:#666">${r.arrive||'--:--'}~${r.leave||'--:--'}${dur?' · '+fmtDcDur(dur):''}</span>
-      </div>
-      ${chips?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:5px">${chips}</div>`:''}
-      ${hwTasksHtml(r)}
-      ${r.note?`<div style="font-size:10px;color:#888;margin-top:4px">📝 ${r.note}</div>`:''}
-    </div>`;
-  });
-  if(rs.length>10) html+=`<div style="text-align:center;font-size:9px;color:#bbb">仅显示最近10天，共${rs.length}天</div>`;
-  html+='</div>';
-  const wrap=document.createElement('div');
-  wrap.style.cssText='position:fixed;left:-99999px;top:0;width:420px;background:#fff;z-index:-1';
-  wrap.innerHTML=html;
-  document.body.appendChild(wrap);
-  ensureHtml2Canvas(()=>{
-    html2canvas(wrap,{scale:2,backgroundColor:'#fff'}).then(canvas=>{
-      wrap.remove();
-      canvas.toBlob(blob=>{
-        if(!blob){ toast('导出失败：无法生成图片'); return; }
-        downloadBlob(blob,'托班报告_'+s.name+'_'+todayStr()+'.png');
-        toast('✅ 图片已保存');
-      },'image/png');
-    }).catch(e=>{ wrap.remove(); toast('导出失败：'+e.message); });
-  });
+  r.arrive=a; r.leave=l; r.updatedAt=now(); DB.save(); closeModal(); renderDaycare(); toast('✓ 已保存时间');
 }
 function delDaycareRecord(id){
-  if(!confirm('确定删除这条托班记录？')) return;
-  if(DB.data.daycare[id]){ DB.data.daycare[id]._deleted=true; DB.data.daycare[id].updatedAt=now(); DB.save(); closeModal(); renderDaycare(); toast('已删除'); }
-}
-function exportDcDay(){
-  toast('正在生成图片...');
-  const recs=getDaycareRecords(dcDate);
-  let html=`<div style="background:#fff;color:#1a1a1a;padding:16px;font-family:system-ui,sans-serif">
-    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px">
-      <span style="font-size:16px;font-weight:700">🏫 托班记录</span>
-      <span style="font-size:13px;font-weight:600">${+dcDate.slice(5,7)}月${+dcDate.slice(8)}日 周${DC_WD[dayOfWeek(dcDate)]}</span>
-      <span style="font-size:12px;color:#666">${recs.length}人</span>
-    </div>`;
-  if(!recs.length){
-    html+=`<div style="color:#999;font-size:12px;padding:16px;text-align:center">当天暂无托班记录</div>`;
-  } else {
-    const hs=hwStat(recs);
-    html+=`<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
-      <span style="background:#eff6ff;color:#1d4ed8;border-radius:8px;padding:3px 8px;font-size:11px">📅 ${recs.length}人</span>
-      <span style="background:#dcfce7;color:#16a34a;border-radius:8px;padding:3px 8px;font-size:11px">✓完成 ${hs.done}</span>
-      <span style="background:#fef3c7;color:#d97706;border-radius:8px;padding:3px 8px;font-size:11px">◐部分 ${hs.partial}</span>
-      <span style="background:#fee2e2;color:#dc2626;border-radius:8px;padding:3px 8px;font-size:11px">✗未做 ${hs.none}</span>
-    </div>`;
-    const _st=dcSubjectStat(recs);
-    const _keys=Object.keys(_st).filter(k=>_st[k].total>0).sort((a,b)=>_st[b].total-_st[a].total);
-    if(_keys.length){
-      html+=`<div style="margin-bottom:10px"><div style="font-size:12px;font-weight:600;margin-bottom:6px">📚 作业看板</div>`;
-      _keys.forEach(k=>{
-        const v=_st[k]; const p=dcRateOf(v);
-        html+=`<div style="margin-bottom:7px">
-          <div style="display:flex;align-items:center;gap:6px;font-size:10px;line-height:13px">
-            <span style="font-weight:600;min-width:38px">${k}</span>
-            <span style="color:#16a34a">✓${v.done}</span>
-            <span style="color:#d97706">◐${v.partial}</span>
-            <span style="color:#dc2626">✗${v.none}</span>
-            <span style="margin-left:auto;font-weight:700;color:${dcRateColor(p)}">${p}%</span>
-          </div>
-          <div style="height:4px;background:#eef0f3;border-radius:2px;margin-top:2px;overflow:hidden;display:flex">
-            <div style="width:${v.done/v.total*100}%;background:#22c55e"></div>
-            <div style="width:${v.partial/v.total*100}%;background:#f59e0b"></div>
-            <div style="width:${v.none/v.total*100}%;background:#ef4444"></div>
-          </div></div>`;
-      });
-      html+=`</div>`;
-    }
-    recs.slice().sort((a,b)=>(a.arrive||'').localeCompare(b.arrive||'')).forEach(r=>{
-      const stu=DB.data.students[r.studentId];
-      const dur=dcDuration(r);
-      const chips=hwChips(r);
-      html+=`<div style="border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;margin-bottom:8px">
-        <div style="display:flex;align-items:center;gap:6px">
-          <span style="font-size:14px;font-weight:700">${stu&&!stu._deleted?stu.name:'(已删除)'}</span>
-          ${stu&&stu.grade?`<span style="background:#f3f4f6;color:#4b5563;border-radius:6px;padding:1px 6px;font-size:10px">${stu.grade}</span>`:''}
-          <span style="margin-left:auto;font-size:11px;color:#666">${r.arrive||'--:--'}~${r.leave||'--:--'}${dur?' · '+fmtDcDur(dur):''}</span>
-        </div>
-        ${chips?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px">${chips}</div>`:''}
-        ${hwTasksHtml(r)}
-        ${r.note?`<div style="font-size:11px;color:#888;margin-top:5px">📝 ${r.note}</div>`:''}
-      </div>`;
-    });
-  }
-  html+='</div>';
-  const wrap=document.createElement('div');
-  wrap.style.cssText='position:fixed;left:-99999px;top:0;width:420px;background:#fff;z-index:-1';
-  wrap.innerHTML=html;
-  document.body.appendChild(wrap);
-  ensureHtml2Canvas(()=>{
-    html2canvas(wrap,{scale:2,backgroundColor:'#fff'}).then(canvas=>{
-      wrap.remove();
-      canvas.toBlob(blob=>{
-        if(!blob){ toast('导出失败：无法生成图片'); return; }
-        downloadBlob(blob,`托班记录_${dcDate}.png`);
-        toast('✅ 图片已保存');
-      },'image/png');
-    }).catch(e=>{ wrap.remove(); toast('导出失败：'+e.message); });
-  });
+  const r=DB.data.daycare[id]; if(!r) return;
+  if(!confirm('删除该学生 '+r.date.slice(5)+' 的今日记录？\n（作业、到离班时间都会删除，可撤销）')) return;
+  const snap=JSON.parse(JSON.stringify(r));
+  r._deleted=true; r.updatedAt=now(); DB.save(); closeModal(); renderDaycare();
+  dcUndoPush('删除今日记录', ()=>{ DB.data.daycare[id]=snap; DB.save(); renderDaycare(); });
 }
 
-/* ==================== 托班汇总视图 ==================== */
-function dcMonthDateList(off){
-  return getMonthDates(off).dates.filter(d=>!d.other).map(d=>d.date);
+/* ==================== 反馈与日报 ==================== */
+function dcQuickNotes(){
+  const st=DB.data.settings||{};
+  return (st.dcQuickNotes&&st.dcQuickNotes.length)?st.dcQuickNotes:DC_QUICK_DEFAULT;
 }
+function dcEditQuickNotes(){
+  const cur=dcQuickNotes().join('、');
+  const v=prompt('设置快捷短语（用顿号分隔）',cur);
+  if(v===null) return;
+  if(!DB.data.settings) DB.data.settings={};
+  DB.data.settings.dcQuickNotes=v.split(/[、,，]/).map(x=>x.trim()).filter(Boolean);
+  DB.save(); toast('✓ 已保存快捷短语');
+}
+function dcFeedbackText(sid){
+  const s=DB.data.students[sid]; const r=findDaycareRecord(sid,dcDate);
+  const L=[];
+  L.push((s?s.name:'')+' '+(+dcDate.slice(5,7))+'月'+(+dcDate.slice(8))+'日 托班反馈');
+  if(!r){ L.push('· 今日未到班'); return L.join('\n'); }
+  L.push('· 到离班：'+(r.arrive||'未记录')+' ~ '+(r.leave||'未离班'));
+  const items=dcItems(r); const c=dcCounts(r); const tot=dcTotal(r);
+  if(r.noHw) L.push('· 作业：今日无作业');
+  else if(!tot) L.push('· 作业：未录入');
+  else{
+    L.push('· 作业共 '+tot+' 项，已完成 '+c.done+'、待检查 '+c.tocheck+'、待订正 '+c.fix+'、未完成 '+c.todo);
+    const groups={}; items.forEach(it=>{ const k=it.s||'其他'; if(!groups[k]) groups[k]=[]; groups[k].push(it); });
+    Object.keys(groups).forEach(k=>{
+      const arr=groups[k];
+      const parts=arr.map(it=>it.text+'（'+dcStatus(it.st).t+(it.note?'；'+it.note:'')+'）');
+      L.push('  '+k+'：'+parts.join('、'));
+    });
+  }
+  const need=items.filter(it=>it.st==='fix'||it.st==='todo'||it.st==='tocheck');
+  if(need.length) L.push('· 仍需跟进：'+need.map(it=>(it.s?it.s+'/':'')+it.text).join('、'));
+  if(r.note) L.push('· 老师备注：'+r.note);
+  if(r.leaveNote) L.push('· 离班原因：'+r.leaveNote);
+  L.push('（以上内容由当天实际记录整理，未记录的信息不填写）');
+  return L.join('\n');
+}
+function openDcFeedback(sid){
+  const s=DB.data.students[sid];
+  const text=dcFeedbackText(sid);
+  const h='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">根据当天记录整理，可编辑后复制，不会自动发送给家长。</div>'
+    +'<textarea id="dc-fb" class="form-control" rows="12" style="font-size:12px">'+dcEsc(text)+'</textarea>'
+    +'<div style="font-size:11px;font-weight:600;margin:8px 0 4px">快捷短语（点击追加）</div>'
+    +'<div style="display:flex;gap:5px;flex-wrap:wrap">'+dcQuickNotes().map((q,i)=>'<button class="chip" style="font-size:11px" onclick="dcAppendNote(\''+dcEsc(q)+'\')">'+dcEsc(q)+'</button>').join('')
+    +'<button class="chip" style="font-size:11px;color:var(--text3)" onclick="dcEditQuickNotes()">⚙ 编辑</button></div>';
+  const footer='<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button><button class="btn btn-primary" style="flex:2" onclick="dcCopyBox(\'dc-fb\')">📋 复制反馈</button>';
+  openModal(h,footer); setSheetTitle('今日反馈 · '+(s?s.name:''));
+}
+function dcAppendNote(t){
+  const el=$('#dc-fb'); if(!el) return;
+  el.value=el.value.replace(/\s*$/,'')+'\n'+t;
+}
+function dcDailyText(){
+  const recs=getDaycareRecords(dcDate);
+  const S=window._dcSummary||{};
+  const L=[];
+  L.push('托班日报 '+dcDate+' 周'+DC_WD[dayOfWeek(dcDate)]);
+  L.push('· 到离班：今日名单 '+dcTodayStudents().length+' 人，已离班 '+(S.left||0)+' 人，仍在托 '+(S.inCare||0)+' 人');
+  let c={todo:0,tocheck:0,fix:0,done:0};
+  recs.forEach(r=>{ const x=dcCounts(r); c.todo+=x.todo; c.tocheck+=x.tocheck; c.fix+=x.fix; c.done+=x.done; });
+  const tot=c.todo+c.tocheck+c.fix+c.done;
+  L.push('· 作业检查：共 '+tot+' 项，已完成 '+c.done+'、待检查 '+c.tocheck+'、待订正 '+c.fix+'、未完成 '+c.todo);
+  const pend=[];
+  recs.forEach(r=>{
+    const s=DB.data.students[r.studentId]; if(!s) return;
+    const need=dcItems(r).filter(it=>it.st!=='done');
+    if(need.length) pend.push('  '+s.name+'：'+need.map(it=>(it.s?it.s+'/':'')+it.text+'（'+dcStatus(it.st).t+'）').join('、'));
+    else if(!dcItems(r).length && !r.noHw) pend.push('  '+s.name+'：未录作业');
+  });
+  if(pend.length) L.push('· 未完成事项：\n'+pend.join('\n'));
+  const notes=recs.filter(r=>r.note).map(r=>{ const s=DB.data.students[r.studentId]; return '  '+(s?s.name:'')+'：'+r.note; });
+  if(notes.length) L.push('· 老师补充记录：\n'+notes.join('\n'));
+  L.push('（仅汇总已记录内容，未记录的信息不填写）');
+  return L.join('\n');
+}
+function openDcDaily(){
+  const text=dcDailyText();
+  const h='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">汇总当天实际记录，可编辑后复制。不会自动发送给家长。</div>'
+    +'<textarea id="dc-dr" class="form-control" rows="14" style="font-size:12px">'+dcEsc(text)+'</textarea>';
+  const footer='<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">关闭</button><button class="btn btn-primary" style="flex:2" onclick="dcCopyBox(\'dc-dr\')">📋 复制日报</button>';
+  openModal(h,footer); setSheetTitle('班级工作日报');
+}
+function dcCopyBox(id){
+  const el=$('#'+id); if(!el) return;
+  const ta=document.createElement('textarea');
+  ta.value=el.value; document.body.appendChild(ta); ta.select();
+  let ok=false; try{ ok=document.execCommand('copy'); }catch(e){}
+  ta.remove();
+  toast(ok?'✓ 已复制到剪贴板':'复制失败，请长按选中文本复制');
+}
+
+/* ==================== 个人 / 汇总 / 导出 ==================== */
+function showDcPerson(sid){ dcPersonId=sid; renderDaycare(); }
+function backDcPeople(){ dcPersonId=''; renderDaycare(); }
+function renderDcPeople(){
+  $('#dc-nav-box').innerHTML='';
+  const stus=Object.values(DB.data.students||{}).filter(s=>!s._deleted);
+  const recs=allDaycareRecords();
+  const byStu={}; recs.forEach(r=>{ if(!byStu[r.studentId]) byStu[r.studentId]=[]; byStu[r.studentId].push(r); });
+  const mp=todayStr().slice(0,7);
+  const monthRecs=recs.filter(r=>r.date.startsWith(mp));
+  $('#daycare-stats').innerHTML='<div class="stat-card"><div class="s-num">'+recs.length+'</div><div class="s-lbl">托班总人次</div></div>'
+    +'<div class="stat-card"><div class="s-num">'+Object.keys(byStu).length+'</div><div class="s-lbl">参与学生</div></div>'
+    +'<div class="stat-card"><div class="s-num">'+monthRecs.length+'</div><div class="s-lbl">本月记录</div></div>'
+    +'<div class="stat-card"><div class="s-num">'+new Set(monthRecs.map(r=>r.studentId)).size+'</div><div class="s-lbl">本月学生</div></div>';
+  const list=stus.map(s=>({s:s,rs:(byStu[s.id]||[]).sort((a,b)=>b.date.localeCompare(a.date))})).sort((a,b)=>b.rs.length-a.rs.length);
+  let html='';
+  list.forEach(({s,rs})=>{
+    const md=rs.filter(r=>r.date.startsWith(mp)).length;
+    let c={todo:0,tocheck:0,fix:0,done:0};
+    rs.forEach(r=>{ const x=dcCounts(r); c.todo+=x.todo; c.tocheck+=x.tocheck; c.fix+=x.fix; c.done+=x.done; });
+    const tot=c.todo+c.tocheck+c.fix+c.done;
+    html+='<div class="card" style="padding:9px 11px;margin-bottom:6px" onclick="showDcPerson(\''+s.id+'\')">'
+      +'<div style="display:flex;align-items:center;gap:5px"><span style="font-weight:600;font-size:14px">'+dcEsc(s.name)+'</span>'+gradeTag(s.grade)+dcVisitBadge(s)
+      +'<span style="margin-left:auto;font-size:11px;color:var(--text3)">'+(rs.length?'最近 '+rs[0].date.slice(5):'暂无记录')+'</span></div>'
+      +'<div style="font-size:10px;color:var(--text2);margin-top:4px">📅 '+rs.length+'天 · 本月'+md+(tot?' · 完成率 '+Math.round(c.done/tot*100)+'%':'')+'</div></div>';
+  });
+  $('#daycare-content').innerHTML=html||'<div class="card" style="text-align:center;color:var(--text3);font-size:12px;padding:24px">暂无学生</div>';
+}
+function renderDcPerson(sid){
+  const s=DB.data.students[sid];
+  if(!s||s._deleted){ dcPersonId=''; renderDcPeople(); return; }
+  const rs=allDaycareRecords().filter(r=>r.studentId===sid).sort((a,b)=>b.date.localeCompare(a.date));
+  $('#dc-nav-box').innerHTML='<div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">'
+    +'<button class="btn btn-sm btn-ghost" onclick="backDcPeople()">‹ 返回</button>'
+    +'<span style="font-weight:700;font-size:15px">'+dcEsc(s.name)+'</span>'+gradeTag(s.grade)
+    +'<button class="btn btn-sm btn-ghost" onclick="setDcQuota(\''+sid+'\')">🎟 次数包</button>'
+    +'<button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="exportDcPerson(\''+sid+'\')">📤 导出</button></div>';
+  const mp=todayStr().slice(0,7);
+  const monthDays=rs.filter(r=>r.date.startsWith(mp)).length;
+  const weekSet=new Set(getWeekDates(0));
+  const weekDays=rs.filter(r=>weekSet.has(r.date)).length;
+  let c={todo:0,tocheck:0,fix:0,done:0};
+  rs.forEach(r=>{ const x=dcCounts(r); c.todo+=x.todo; c.tocheck+=x.tocheck; c.fix+=x.fix; c.done+=x.done; });
+  const tot=c.todo+c.tocheck+c.fix+c.done;
+  const durs=rs.map(dcDuration).filter(Boolean);
+  const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
+  const qLeft=(s.dcQuota||0)?(s.dcQuota-rs.length):null;
+  $('#daycare-stats').innerHTML='<div class="stat-card"><div class="s-num">'+rs.length+'</div><div class="s-lbl">总到访次数</div><div style="font-size:9px;color:var(--text3);margin-top:1px">本周 '+weekDays+' 次</div></div>'
+    +'<div class="stat-card"><div class="s-num">'+monthDays+'</div><div class="s-lbl">本月到访</div><div style="font-size:9px;color:var(--text3);margin-top:1px">'+durs.length+' 天有时长</div></div>'
+    +'<div class="stat-card"><div class="s-num">'+c.done+'</div><div class="s-lbl">已完成作业项</div><div style="font-size:9px;color:var(--text3);margin-top:1px">共 '+tot+' 项</div></div>'
+    +(qLeft!==null?'<div class="stat-card"><div class="s-num" style="color:'+(qLeft<=0?'#dc2626':(qLeft<=3?'#d97706':'#16a34a'))+'">'+qLeft+'</div><div class="s-lbl">🎟 剩余次数</div><div style="font-size:9px;color:var(--text3);margin-top:1px">共 '+s.dcQuota+' 次</div></div>'
+    :'<div class="stat-card"><div class="s-num" style="font-size:15px;line-height:26px">'+fmtDcDur(avg)+'</div><div class="s-lbl">平均托管时长</div><div style="font-size:9px;color:var(--text3);margin-top:1px">未设次数包</div></div>');
+  const stat=dcSubjectStat(rs);
+  const keys=Object.keys(stat).sort((a,b)=>stat[b].total-stat[a].total);
+  let html='';
+  if(keys.length){
+    html+='<div class="card-h" style="margin:4px 0 8px"><h3>📚 作业统计（按科目）</h3></div><div class="card" style="padding:0;margin-bottom:10px;overflow:hidden"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+      +'<tr style="background:var(--bg)"><th style="padding:7px 6px;text-align:left">科目</th><th style="padding:7px 2px">已完成</th><th style="padding:7px 2px">待检查</th><th style="padding:7px 2px">待订正</th><th style="padding:7px 2px">未完成</th><th style="padding:7px 6px;text-align:right">完成率</th></tr>';
+    keys.forEach(k=>{ const v=stat[k]; const p=dcRateOf(v);
+      html+='<tr style="border-top:1px solid var(--border)"><td style="padding:7px 6px;font-weight:600">'+dcEsc(k)+'</td>'
+        +'<td style="padding:7px 2px;text-align:center;color:#16a34a">'+v.done+'</td>'
+        +'<td style="padding:7px 2px;text-align:center;color:#2563eb">'+v.tocheck+'</td>'
+        +'<td style="padding:7px 2px;text-align:center;color:#d97706">'+v.fix+'</td>'
+        +'<td style="padding:7px 2px;text-align:center;color:#6b7280">'+v.todo+'</td>'
+        +'<td style="padding:7px 6px;text-align:right;font-weight:700;color:'+dcRateColor(p)+'">'+p+'%</td></tr>';
+    });
+    html+='</table></div>';
+  }
+  html+='<div class="card-h" style="margin:4px 0 8px"><h3>📋 历史记录（'+rs.length+'天）</h3></div>';
+  rs.slice(0,30).forEach(r=>{
+    const dur=dcDuration(r); const cc=dcCounts(r); const t=dcTotal(r);
+    html+='<div class="card" style="padding:9px 11px;margin-bottom:6px" onclick="dcOpenDate(\''+r.date+'\',\''+sid+'\')">'
+      +'<div style="display:flex;align-items:center;gap:6px"><span style="font-weight:600;font-size:13px">'+r.date.slice(5)+' 周'+DC_WD[dayOfWeek(r.date)]+'</span>'
+      +'<span style="margin-left:auto;font-size:11px;color:var(--text2)">'+(r.arrive||'--:--')+'~'+(r.leave||'--:--')+(dur?' · '+fmtDcDur(dur):'')+'</span></div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:3px">'+(r.noHw?'今日无作业':(t?('完成 '+cc.done+'/'+t+' · 待检查 '+cc.tocheck+' · 待订正 '+cc.fix):'未录作业'))+'</div>'
+      +(dcItems(r).length?'<div style="font-size:10px;color:var(--text3);margin-top:3px;line-height:1.5">'+dcItems(r).map(it=>(it.s?it.s+':':'')+it.text).join(' · ')+'</div>':'')
+      +(r.note?'<div style="font-size:10px;color:var(--text3);margin-top:3px">📝 '+dcEsc(r.note)+'</div>':'')+'</div>';
+  });
+  if(rs.length>30) html+='<div style="text-align:center;font-size:11px;color:var(--text3);padding:8px">仅显示最近30天</div>';
+  $('#daycare-content').innerHTML=html;
+}
+function dcOpenDate(date,sid){ dcDate=date; dcView='day'; dcOpenId=sid||''; document.querySelectorAll('#dc-view-switch button').forEach(b=>b.classList.toggle('active',b.dataset.dcv==='day')); renderDaycare(); }
+function dcMonthDateList(off){ return getMonthDates(off).dates.filter(d=>!d.other).map(d=>d.date); }
 function dcRangeRecs(mode){
   const all=allDaycareRecords();
   if(mode==='all') return all;
@@ -7145,131 +7508,189 @@ function dcStuRows(recs){
   const byStu={};
   recs.forEach(r=>{ if(!byStu[r.studentId]) byStu[r.studentId]=[]; byStu[r.studentId].push(r); });
   return Object.keys(byStu).map(sid=>{
-    const rs=byStu[sid]; const h=hwStat(rs); const t=h.done+h.partial+h.none;
-    const durs=rs.map(dcDuration).filter(Boolean);
-    return {sid,days:rs.length,done:h.done,partial:h.partial,none:h.none,total:t,
-      pct:t?Math.round(h.done/t*100):-1,
+    let c={todo:0,tocheck:0,fix:0,done:0};
+    byStu[sid].forEach(r=>{ const x=dcCounts(r); c.todo+=x.todo; c.tocheck+=x.tocheck; c.fix+=x.fix; c.done+=x.done; });
+    const tot=c.todo+c.tocheck+c.fix+c.done;
+    const durs=byStu[sid].map(dcDuration).filter(Boolean);
+    return {sid:sid,days:byStu[sid].length,done:c.done,tocheck:c.tocheck,fix:c.fix,todo:c.todo,total:tot,
+      pct:tot?Math.round(c.done/tot*100):-1,
       avg:durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0};
   }).sort((a,b)=>(a.pct<0?101:a.pct)-(b.pct<0?101:b.pct));
 }
 function renderDcSum(){
-  $('#dc-nav-box').innerHTML='<div class="filter-bar" style="margin-bottom:4px">'
+  $('#dc-nav-box').innerHTML='<div style="display:flex;gap:5px;margin-bottom:6px">'
     +[['week','本周'],['month','本月'],['lastMonth','上月'],['all','全部']].map(x=>{
       const act=dcSumRange===x[0];
-      return '<button class="chip" style="white-space:nowrap;'+(act?'background:var(--primary);color:#fff;border-color:var(--primary)':'')+'" onclick="setDcSumRange(\''+x[0]+'\')">'+x[1]+'</button>';
-    }).join('')
-    +'<button class="chip" style="white-space:nowrap" onclick="exportDcSum()">📤 导出</button></div>'
-    +'<div style="font-size:11px;color:var(--text3);margin-bottom:6px;padding-left:2px">'+dcRangeLabel(dcSumRange)+'</div>';
+      return '<button class="chip" style="white-space:nowrap;font-size:11px;'+(act?'background:var(--primary);color:#fff;border-color:var(--primary)':'')+'" onclick="setDcSumRange(\''+x[0]+'\')">'+x[1]+'</button>';
+    }).join('')+'<button class="chip" style="white-space:nowrap;font-size:11px" onclick="exportDcSum()">📤 导出</button></div>'
+    +'<div style="font-size:11px;color:var(--text3);margin-bottom:6px">'+dcEsc(dcRangeLabel(dcSumRange))+'</div>';
   const recs=dcRangeRecs(dcSumRange);
   const stuIds=[...new Set(recs.map(r=>r.studentId))];
-  const hs=hwStat(recs); const tot=hs.done+hs.partial+hs.none;
-  const pct=tot?Math.round(hs.done/tot*100):0;
+  let c={todo:0,tocheck:0,fix:0,done:0};
+  recs.forEach(r=>{ const x=dcCounts(r); c.todo+=x.todo; c.tocheck+=x.tocheck; c.fix+=x.fix; c.done+=x.done; });
+  const tot=c.todo+c.tocheck+c.fix+c.done;
+  const pct=tot?Math.round(c.done/tot*100):0;
   const durs=recs.map(dcDuration).filter(Boolean);
   const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
   const days=[...new Set(recs.map(r=>r.date))].length;
-  $('#daycare-stats').innerHTML='<div class="stat-card"><div class="s-num">'+recs.length+'</div><div class="s-lbl">\u6258\u73ed\u4eba\u6b21</div><div style="font-size:9px;color:var(--text3);margin-top:1px">'+days+' \u5929</div></div>'
-    +'<div class="stat-card"><div class="s-num">'+stuIds.length+'</div><div class="s-lbl">\u53c2\u4e0e\u5b66\u751f</div><div style="font-size:9px;color:var(--text3);margin-top:1px">\u5171 '+tot+' \u9879\u4f5c\u4e1a</div></div>'
-    +'<div class="stat-card"><div class="s-num" style="color:'+(tot?dcRateColor(pct):'var(--text3)')+'">'+(tot?pct+'%':'\u2014')+'</div><div class="s-lbl">\u4f5c\u4e1a\u5b8c\u6210\u7387</div><div style="font-size:9px;color:var(--text3);margin-top:1px">\u2713'+hs.done+' \u25d0'+hs.partial+' \u2717'+hs.none+'</div></div>'
-    +'<div class="stat-card"><div class="s-num" style="font-size:15px;line-height:26px">'+fmtDcDur(avg)+'</div><div class="s-lbl">\u5e73\u5747\u6258\u7ba1\u65f6\u957f</div><div style="font-size:9px;color:var(--text3);margin-top:1px">'+durs.length+' \u4eba\u6709\u65f6\u957f</div></div>';
-  if(!recs.length){
-    $('#daycare-content').innerHTML='<div class="card" style="text-align:center;color:var(--text3);font-size:12px;padding:24px">\u8be5\u65f6\u6bb5\u6682\u65e0\u6258\u73ed\u8bb0\u5f55</div>';
-    return;
-  }
+  $('#daycare-stats').innerHTML='<div class="stat-card"><div class="s-num">'+recs.length+'</div><div class="s-lbl">托班人次</div><div style="font-size:9px;color:var(--text3);margin-top:1px">'+days+' 天</div></div>'
+    +'<div class="stat-card"><div class="s-num">'+stuIds.length+'</div><div class="s-lbl">参与学生</div><div style="font-size:9px;color:var(--text3);margin-top:1px">共 '+tot+' 项作业</div></div>'
+    +'<div class="stat-card"><div class="s-num" style="color:'+(tot?dcRateColor(pct):'var(--text3)')+'">'+(tot?pct+'%':'—')+'</div><div class="s-lbl">作业完成率</div><div style="font-size:9px;color:var(--text3);margin-top:1px">已完成 '+c.done+' 项</div></div>'
+    +'<div class="stat-card"><div class="s-num" style="font-size:15px;line-height:26px">'+fmtDcDur(avg)+'</div><div class="s-lbl">平均托管时长</div><div style="font-size:9px;color:var(--text3);margin-top:1px">待检查 '+c.tocheck+' · 待订正 '+c.fix+'</div></div>';
+  if(!recs.length){ $('#daycare-content').innerHTML='<div class="card" style="text-align:center;color:var(--text3);font-size:12px;padding:24px">该时段暂无托班记录</div>'; return; }
   let html='';
-  const st=dcSubjectStat(recs);
-  const keys=Object.keys(st).filter(k=>st[k].total>0).sort((a,b)=>st[b].total-st[a].total);
-  html+='<div class="card-h" style="margin:4px 0 8px"><h3>📚 \u79d1\u76ee\u4f5c\u4e1a\u7edf\u8ba1</h3><span style="font-size:11px;color:var(--text3)">'+keys.length+' \u79d1</span></div>';
-  html+='<div class="card" style="padding:0;margin-bottom:10px;overflow:hidden"><table style="width:100%;border-collapse:collapse;font-size:12px">'
-    +'<tr style="background:var(--bg)"><th style="padding:7px 8px;text-align:left;font-weight:600">\u79d1\u76ee</th><th style="padding:7px 2px;font-weight:600">\u2713</th><th style="padding:7px 2px;font-weight:600">\u25d0</th><th style="padding:7px 2px;font-weight:600">\u2717</th><th style="padding:7px 8px;text-align:right;font-weight:600">\u5b8c\u6210\u7387</th></tr>';
-  keys.forEach(k=>{
-    const v=st[k]; const p=dcRateOf(v);
-    html+='<tr style="border-top:1px solid var(--border)"><td style="padding:7px 8px;font-weight:600">'+k+'</td>'
+  const stat=dcSubjectStat(recs);
+  const keys=Object.keys(stat).filter(k=>stat[k].total>0).sort((a,b)=>stat[b].total-stat[a].total);
+  html+='<div class="card-h" style="margin:4px 0 8px"><h3>📚 科目作业统计</h3><span style="font-size:11px;color:var(--text3)">'+keys.length+' 科</span></div>'
+    +'<div class="card" style="padding:0;margin-bottom:10px;overflow:hidden"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+    +'<tr style="background:var(--bg)"><th style="padding:7px 6px;text-align:left">科目</th><th style="padding:7px 2px">完成</th><th style="padding:7px 2px">待查</th><th style="padding:7px 2px">待订</th><th style="padding:7px 2px">未做</th><th style="padding:7px 6px;text-align:right">完成率</th></tr>';
+  keys.forEach(k=>{ const v=stat[k]; const p=dcRateOf(v);
+    html+='<tr style="border-top:1px solid var(--border)"><td style="padding:7px 6px;font-weight:600">'+dcEsc(k)+'</td>'
       +'<td style="padding:7px 2px;text-align:center;color:#16a34a">'+v.done+'</td>'
-      +'<td style="padding:7px 2px;text-align:center;color:#d97706">'+v.partial+'</td>'
-      +'<td style="padding:7px 2px;text-align:center;color:#dc2626">'+v.none+'</td>'
-      +'<td style="padding:7px 8px;text-align:right"><span style="font-weight:700;color:'+dcRateColor(p)+'">'+p+'%</span></td></tr>';
+      +'<td style="padding:7px 2px;text-align:center;color:#2563eb">'+v.tocheck+'</td>'
+      +'<td style="padding:7px 2px;text-align:center;color:#d97706">'+v.fix+'</td>'
+      +'<td style="padding:7px 2px;text-align:center;color:#6b7280">'+v.todo+'</td>'
+      +'<td style="padding:7px 6px;text-align:right;font-weight:700;color:'+dcRateColor(p)+'">'+p+'%</td></tr>';
   });
   html+='</table></div>';
   const rows=dcStuRows(recs);
-  html+='<div class="card-h" style="margin:4px 0 8px"><h3>👥 \u5b66\u751f\u4f5c\u4e1a\u5b8c\u6210\u7387</h3><span style="font-size:11px;color:var(--text3)">\u9700\u8ddf\u8fdb\u5728\u524d</span></div>';
-  html+='<div class="card" style="padding:0;margin-bottom:10px;overflow:hidden"><table style="width:100%;border-collapse:collapse;font-size:12px">'
-    +'<tr style="background:var(--bg)"><th style="padding:7px 8px;text-align:left;font-weight:600">\u5b66\u751f</th><th style="padding:7px 2px;font-weight:600">\u5929</th><th style="padding:7px 2px;font-weight:600">\u2713</th><th style="padding:7px 2px;font-weight:600">\u25d0</th><th style="padding:7px 2px;font-weight:600">\u2717</th><th style="padding:7px 8px;text-align:right;font-weight:600">\u5b8c\u6210\u7387</th></tr>';
+  html+='<div class="card-h" style="margin:4px 0 8px"><h3>👥 学生作业完成情况</h3><span style="font-size:11px;color:var(--text3)">需跟进在前</span></div>'
+    +'<div class="card" style="padding:0;margin-bottom:10px;overflow:hidden"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+    +'<tr style="background:var(--bg)"><th style="padding:7px 6px;text-align:left">学生</th><th style="padding:7px 2px">天</th><th style="padding:7px 2px">完成</th><th style="padding:7px 2px">待订</th><th style="padding:7px 2px">未做</th><th style="padding:7px 6px;text-align:right">完成率</th></tr>';
   rows.forEach(x=>{
     const stu=DB.data.students[x.sid];
-    const nm=stu&&!stu._deleted?stu.name:'(\u5df2\u5220\u9664)';
-    html+='<tr style="border-top:1px solid var(--border)" onclick="showDcPerson(\''+x.sid+'\')"><td style="padding:7px 8px;font-weight:600">'+nm+'</td>'
+    html+='<tr style="border-top:1px solid var(--border)" onclick="showDcPerson(\''+x.sid+'\')"><td style="padding:7px 6px;font-weight:600">'+dcEsc(stu&&!stu._deleted?stu.name:'(已删除)')+'</td>'
       +'<td style="padding:7px 2px;text-align:center;color:var(--text3)">'+x.days+'</td>'
       +'<td style="padding:7px 2px;text-align:center;color:#16a34a">'+x.done+'</td>'
-      +'<td style="padding:7px 2px;text-align:center;color:#d97706">'+x.partial+'</td>'
-      +'<td style="padding:7px 2px;text-align:center;color:#dc2626">'+x.none+'</td>'
-      +'<td style="padding:7px 8px;text-align:right">'+(x.pct<0?'<span style="color:#9ca3af">\u672a\u8bb0</span>':'<span style="font-weight:700;color:'+dcRateColor(x.pct)+'">'+x.pct+'%</span>')+'</td></tr>';
+      +'<td style="padding:7px 2px;text-align:center;color:#d97706">'+x.fix+'</td>'
+      +'<td style="padding:7px 2px;text-align:center;color:#6b7280">'+x.todo+'</td>'
+      +'<td style="padding:7px 6px;text-align:right">'+(x.pct<0?'<span style="color:#9ca3af">未记</span>':'<span style="font-weight:700;color:'+dcRateColor(x.pct)+'">'+x.pct+'%</span>')+'</td></tr>';
   });
   html+='</table></div>';
-  const byDate={};
-  recs.forEach(r=>{ if(!byDate[r.date]) byDate[r.date]=[]; byDate[r.date].push(r); });
-  const dateKeys=Object.keys(byDate).sort();
-  if(dateKeys.length>1){
-    html+='<div class="card-h" style="margin:4px 0 8px"><h3>📈 \u6bcf\u65e5\u8d8b\u52bf</h3><span style="font-size:11px;color:var(--text3)">\u6700\u8fd1'+Math.min(14,dateKeys.length)+'\u5929</span></div><div class="card" style="padding:12px;margin-bottom:10px">';
-    dateKeys.slice(-14).forEach(d=>{
-      const rs=byDate[d]; const h=hwStat(rs); const t=h.done+h.partial+h.none; const p=t?Math.round(h.done/t*100):0;
-      html+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;font-size:11px">'
-        +'<span style="width:42px;color:var(--text2);font-weight:600">'+d.slice(5)+'</span>'
-        +'<span style="width:30px;color:var(--text3)">'+rs.length+'\u4eba</span>'
-        +'<div style="flex:1;height:8px;background:#eef0f3;border-radius:4px;overflow:hidden"><div style="width:'+p+'%;height:100%;background:'+dcRateColor(p)+';border-radius:4px"></div></div>'
-        +'<span style="width:34px;text-align:right;font-weight:700;color:'+(t?dcRateColor(p):'#9ca3af')+'">'+(t?p+'%':'\u2014')+'</span></div>';
-    });
-    html+='</div>';
-  }
   $('#daycare-content').innerHTML=html;
+}
+function dcItemsLine(r){
+  return dcItems(r).map(it=>'<div style="font-size:10px;color:#374151;line-height:1.5">'+dcEsc((it.s?it.s+':':'')+(it.text||''))+' <span style="color:'+dcStatus(it.st).c+'">'+dcStatus(it.st).t+'</span>'+(it.note?'（'+dcEsc(it.note)+'）':'')+'</div>').join('');
+}
+function exportDcDay(){
+  toast('正在生成图片...');
+  const recs=getDaycareRecords(dcDate);
+  let h='<div style="background:#fff;color:#1a1a1a;padding:16px;font-family:system-ui,sans-serif">'
+    +'<div style="font-size:16px;font-weight:700;margin-bottom:2px">🏫 托班记录</div>'
+    +'<div style="font-size:12px;color:#666;margin-bottom:10px">'+dcDate+' 周'+DC_WD[dayOfWeek(dcDate)]+' · '+recs.length+'人</div>';
+  let c={todo:0,tocheck:0,fix:0,done:0};
+  recs.forEach(r=>{ const x=dcCounts(r); c.todo+=x.todo; c.tocheck+=x.tocheck; c.fix+=x.fix; c.done+=x.done; });
+  h+='<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">'
+    +'<span style="background:#dcfce7;color:#16a34a;border-radius:8px;padding:3px 8px;font-size:11px">已完成 '+c.done+'</span>'
+    +'<span style="background:#dbeafe;color:#2563eb;border-radius:8px;padding:3px 8px;font-size:11px">待检查 '+c.tocheck+'</span>'
+    +'<span style="background:#fef3c7;color:#d97706;border-radius:8px;padding:3px 8px;font-size:11px">待订正 '+c.fix+'</span>'
+    +'<span style="background:#f3f4f6;color:#6b7280;border-radius:8px;padding:3px 8px;font-size:11px">未完成 '+c.todo+'</span></div>';
+  recs.slice().sort((a,b)=>(a.arrive||'').localeCompare(b.arrive||'')).forEach(r=>{
+    const stu=DB.data.students[r.studentId];
+    h+='<div style="border:1px solid #e5e7eb;border-radius:10px;padding:9px 11px;margin-bottom:7px">'
+      +'<div style="display:flex;align-items:center;gap:6px"><span style="font-size:13px;font-weight:700">'+dcEsc(stu&&!stu._deleted?stu.name:'(已删除)')+'</span>'
+      +(stu&&stu.grade?'<span style="background:#f3f4f6;color:#4b5563;border-radius:6px;padding:1px 6px;font-size:10px">'+dcEsc(stu.grade)+'</span>':'')
+      +'<span style="margin-left:auto;font-size:10px;color:#666">'+(r.arrive||'--:--')+'~'+(r.leave||'--:--')+'</span></div>'
+      +(r.noHw?'<div style="font-size:10px;color:#16a34a;margin-top:4px">今日无作业</div>':(dcItems(r).length?dcItemsLine(r):'<div style="font-size:10px;color:#d97706;margin-top:4px">未录作业</div>'))
+      +(r.note?'<div style="font-size:10px;color:#888;margin-top:4px">📝 '+dcEsc(r.note)+'</div>':'')+'</div>';
+  });
+  h+='</div>';
+  dcShot(h,'托班记录_'+dcDate+'.png');
+}
+function exportDcPerson(sid){
+  const s=DB.data.students[sid]; if(!s||s._deleted) return;
+  const rs=allDaycareRecords().filter(r=>r.studentId===sid).sort((a,b)=>b.date.localeCompare(a.date));
+  if(!rs.length){ toast('该学生暂无托班记录'); return; }
+  toast('正在生成图片...');
+  const mp=todayStr().slice(0,7);
+  const md=rs.filter(r=>r.date.startsWith(mp)).length;
+  let c={todo:0,tocheck:0,fix:0,done:0};
+  rs.forEach(r=>{ const x=dcCounts(r); c.todo+=x.todo; c.tocheck+=x.tocheck; c.fix+=x.fix; c.done+=x.done; });
+  const tot=c.todo+c.tocheck+c.fix+c.done;
+  const durs=rs.map(dcDuration).filter(Boolean);
+  const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
+  const qLeft=(s.dcQuota||0)?Math.max(0,s.dcQuota-rs.length):null;
+  let h='<div style="background:#fff;color:#1a1a1a;padding:16px;font-family:system-ui,sans-serif">'
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">'
+    +'<div style="width:44px;height:44px;border-radius:50%;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px">'+dcEsc(s.name.charAt(0))+'</div>'
+    +'<div><div style="font-size:17px;font-weight:700">'+dcEsc(s.name)+'</div><div style="font-size:11px;color:#666">'+dcEsc(s.grade||'—')+' · 托班报告</div>'
+    +(qLeft!==null?'<div style="font-size:10px;color:#d97706;margin-top:2px">🎟 次数包剩余 '+qLeft+'/'+s.dcQuota+' 次</div>':'')+'</div></div>'
+    +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px">'
+    +'<div style="background:#eff6ff;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#1d4ed8">'+rs.length+'</div><div style="font-size:9px;color:#666">总到访</div></div>'
+    +'<div style="background:#f0fdf4;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#16a34a">'+md+'</div><div style="font-size:9px;color:#666">本月</div></div>'
+    +'<div style="background:#fef3c7;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#d97706">'+(tot?Math.round(c.done/tot*100)+'%':'—')+'</div><div style="font-size:9px;color:#666">完成率</div></div>'
+    +'<div style="background:#f5f3ff;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#7c3aed">'+(avg?fmtDcDur(avg):'—')+'</div><div style="font-size:9px;color:#666">平均时长</div></div></div>';
+  const stat=dcSubjectStat(rs); const keys=Object.keys(stat).sort((a,b)=>stat[b].total-stat[a].total);
+  if(keys.length){
+    h+='<div style="font-size:13px;font-weight:600;margin-bottom:6px">📚 作业统计</div><table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px">'
+      +'<tr style="background:#f9fafb"><th style="padding:6px;text-align:left">科目</th><th style="padding:6px">完成</th><th style="padding:6px">待查</th><th style="padding:6px">待订</th><th style="padding:6px">未做</th><th style="padding:6px">完成率</th></tr>';
+    keys.forEach(k=>{ const v=stat[k]; const p=dcRateOf(v);
+      h+='<tr style="border-top:1px solid #e5e7eb"><td style="padding:6px;font-weight:600">'+dcEsc(k)+'</td>'
+        +'<td style="padding:6px;text-align:center;color:#16a34a">'+v.done+'</td>'
+        +'<td style="padding:6px;text-align:center;color:#2563eb">'+v.tocheck+'</td>'
+        +'<td style="padding:6px;text-align:center;color:#d97706">'+v.fix+'</td>'
+        +'<td style="padding:6px;text-align:center;color:#6b7280">'+v.todo+'</td>'
+        +'<td style="padding:6px;text-align:center;font-weight:700;color:'+dcRateColor(p)+'">'+p+'%</td></tr>';
+    });
+    h+='</table>';
+  }
+  h+='<div style="font-size:13px;font-weight:600;margin-bottom:6px">📋 最近记录</div>';
+  rs.slice(0,10).forEach(r=>{
+    h+='<div style="border:1px solid #e5e7eb;border-radius:10px;padding:8px 10px;margin-bottom:6px">'
+      +'<div style="display:flex;align-items:center;gap:6px"><span style="font-size:12px;font-weight:700">'+r.date.slice(5)+' 周'+DC_WD[dayOfWeek(r.date)]+'</span>'
+      +'<span style="margin-left:auto;font-size:10px;color:#666">'+(r.arrive||'--:--')+'~'+(r.leave||'--:--')+'</span></div>'
+      +(r.noHw?'<div style="font-size:10px;color:#16a34a;margin-top:4px">今日无作业</div>':(dcItems(r).length?dcItemsLine(r):'<div style="font-size:10px;color:#d97706;margin-top:4px">未录作业</div>'))
+      +(r.note?'<div style="font-size:10px;color:#888;margin-top:4px">📝 '+dcEsc(r.note)+'</div>':'')+'</div>';
+  });
+  h+='</div>';
+  dcShot(h,'托班报告_'+s.name+'_'+todayStr()+'.png');
 }
 function exportDcSum(){
   const recs=dcRangeRecs(dcSumRange);
-  if(!recs.length){ toast('\u8be5\u65f6\u6bb5\u6682\u65e0\u8bb0\u5f55'); return; }
-  toast('\u6b63\u5728\u751f\u6210\u56fe\u7247...');
+  if(!recs.length){ toast('该时段暂无记录'); return; }
+  toast('正在生成图片...');
   const stuIds=[...new Set(recs.map(r=>r.studentId))];
-  const hs=hwStat(recs); const tot=hs.done+hs.partial+hs.none;
-  const pct=tot?Math.round(hs.done/tot*100):0;
+  let c={todo:0,tocheck:0,fix:0,done:0};
+  recs.forEach(r=>{ const x=dcCounts(r); c.todo+=x.todo; c.tocheck+=x.tocheck; c.fix+=x.fix; c.done+=x.done; });
+  const tot=c.todo+c.tocheck+c.fix+c.done;
+  const pct=tot?Math.round(c.done/tot*100):0;
   const durs=recs.map(dcDuration).filter(Boolean);
   const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):0;
-  const days=[...new Set(recs.map(r=>r.date))].length;
-  let html='<div style="background:#fff;color:#1a1a1a;padding:16px;font-family:system-ui,sans-serif">'
-    +'<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:12px">'
-    +'<span style="font-size:16px;font-weight:700">🏫 \u6258\u73ed\u6c47\u603b</span>'
-    +'<span style="font-size:12px;color:#666">'+dcRangeLabel(dcSumRange)+'</span></div>'
+  let h='<div style="background:#fff;color:#1a1a1a;padding:16px;font-family:system-ui,sans-serif">'
+    +'<div style="font-size:16px;font-weight:700">🏫 托班汇总</div><div style="font-size:12px;color:#666;margin-bottom:10px">'+dcEsc(dcRangeLabel(dcSumRange))+'</div>'
     +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px">'
-    +'<div style="background:#eff6ff;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#1d4ed8">'+recs.length+'</div><div style="font-size:9px;color:#666">\u4eba\u6b21</div></div>'
-    +'<div style="background:#f5f3ff;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#7c3aed">'+stuIds.length+'</div><div style="font-size:9px;color:#666">\u5b66\u751f</div></div>'
-    +'<div style="background:#f0fdf4;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#16a34a">'+(tot?pct+'%':'\u2014')+'</div><div style="font-size:9px;color:#666">\u5b8c\u6210\u7387</div></div>'
-    +'<div style="background:#fef3c7;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#d97706">'+fmtDcDur(avg)+'</div><div style="font-size:9px;color:#666">\u5747\u65f6\u957f</div></div></div>';
-  const st=dcSubjectStat(recs);
-  const keys=Object.keys(st).filter(k=>st[k].total>0).sort((a,b)=>st[b].total-st[a].total);
-  html+='<div style="font-size:13px;font-weight:600;margin-bottom:6px">📚 \u79d1\u76ee\u7edf\u8ba1</div>'
-    +'<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px">'
-    +'<tr style="background:#f9fafb"><th style="padding:6px;text-align:left">\u79d1\u76ee</th><th style="padding:6px">\u2713</th><th style="padding:6px">\u25d0</th><th style="padding:6px">\u2717</th><th style="padding:6px">\u5b8c\u6210\u7387</th></tr>';
-  keys.forEach(k=>{
-    const v=st[k]; const p=dcRateOf(v);
-    html+='<tr style="border-top:1px solid #e5e7eb"><td style="padding:6px;font-weight:600">'+k+'</td>'
+    +'<div style="background:#eff6ff;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#1d4ed8">'+recs.length+'</div><div style="font-size:9px;color:#666">人次</div></div>'
+    +'<div style="background:#f5f3ff;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#7c3aed">'+stuIds.length+'</div><div style="font-size:9px;color:#666">学生</div></div>'
+    +'<div style="background:#f0fdf4;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#16a34a">'+(tot?pct+'%':'—')+'</div><div style="font-size:9px;color:#666">完成率</div></div>'
+    +'<div style="background:#fef3c7;border-radius:8px;padding:8px 4px;text-align:center"><div style="font-size:16px;font-weight:700;color:#d97706">'+(avg?fmtDcDur(avg):'—')+'</div><div style="font-size:9px;color:#666">均时长</div></div></div>';
+  const stat=dcSubjectStat(recs); const keys=Object.keys(stat).filter(k=>stat[k].total>0).sort((a,b)=>stat[b].total-stat[a].total);
+  h+='<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px">'
+    +'<tr style="background:#f9fafb"><th style="padding:6px;text-align:left">科目</th><th style="padding:6px">完成</th><th style="padding:6px">待查</th><th style="padding:6px">待订</th><th style="padding:6px">未做</th><th style="padding:6px">完成率</th></tr>';
+  keys.forEach(k=>{ const v=stat[k]; const p=dcRateOf(v);
+    h+='<tr style="border-top:1px solid #e5e7eb"><td style="padding:6px;font-weight:600">'+dcEsc(k)+'</td>'
       +'<td style="padding:6px;text-align:center;color:#16a34a">'+v.done+'</td>'
-      +'<td style="padding:6px;text-align:center;color:#d97706">'+v.partial+'</td>'
-      +'<td style="padding:6px;text-align:center;color:#dc2626">'+v.none+'</td>'
+      +'<td style="padding:6px;text-align:center;color:#2563eb">'+v.tocheck+'</td>'
+      +'<td style="padding:6px;text-align:center;color:#d97706">'+v.fix+'</td>'
+      +'<td style="padding:6px;text-align:center;color:#6b7280">'+v.todo+'</td>'
       +'<td style="padding:6px;text-align:center;font-weight:700;color:'+dcRateColor(p)+'">'+p+'%</td></tr>';
   });
-  html+='</table>';
+  h+='</table>';
   const rows=dcStuRows(recs);
-  html+='<div style="font-size:13px;font-weight:600;margin-bottom:6px">👥 \u5b66\u751f\u660e\u7ec6</div>'
-    +'<table style="width:100%;border-collapse:collapse;font-size:11px">'
-    +'<tr style="background:#f9fafb"><th style="padding:6px;text-align:left">\u5b66\u751f</th><th style="padding:6px">\u5929</th><th style="padding:6px">\u2713</th><th style="padding:6px">\u25d0</th><th style="padding:6px">\u2717</th><th style="padding:6px">\u5b8c\u6210\u7387</th></tr>';
+  h+='<div style="font-size:13px;font-weight:600;margin-bottom:6px">👥 学生明细</div><table style="width:100%;border-collapse:collapse;font-size:11px">'
+    +'<tr style="background:#f9fafb"><th style="padding:6px;text-align:left">学生</th><th style="padding:6px">天</th><th style="padding:6px">完成</th><th style="padding:6px">待订</th><th style="padding:6px">未做</th><th style="padding:6px">完成率</th></tr>';
   rows.forEach(x=>{
     const stu=DB.data.students[x.sid];
-    const nm=stu&&!stu._deleted?stu.name:'(\u5df2\u5220\u9664)';
-    html+='<tr style="border-top:1px solid #e5e7eb"><td style="padding:6px;font-weight:600">'+nm+'</td>'
+    h+='<tr style="border-top:1px solid #e5e7eb"><td style="padding:6px;font-weight:600">'+dcEsc(stu&&!stu._deleted?stu.name:'(已删除)')+'</td>'
       +'<td style="padding:6px;text-align:center;color:#666">'+x.days+'</td>'
       +'<td style="padding:6px;text-align:center;color:#16a34a">'+x.done+'</td>'
-      +'<td style="padding:6px;text-align:center;color:#d97706">'+x.partial+'</td>'
-      +'<td style="padding:6px;text-align:center;color:#dc2626">'+x.none+'</td>'
-      +'<td style="padding:6px;text-align:center;font-weight:700;color:'+(x.pct<0?'#9ca3af':dcRateColor(x.pct))+'">'+(x.pct<0?'\u672a\u8bb0':x.pct+'%')+'</td></tr>';
+      +'<td style="padding:6px;text-align:center;color:#d97706">'+x.fix+'</td>'
+      +'<td style="padding:6px;text-align:center;color:#6b7280">'+x.todo+'</td>'
+      +'<td style="padding:6px;text-align:center;font-weight:700;color:'+(x.pct<0?'#9ca3af':dcRateColor(x.pct))+'">'+(x.pct<0?'未记':x.pct+'%')+'</td></tr>';
   });
-  html+='</table></div>';
+  h+='</table></div>';
+  dcShot(h,'托班汇总_'+dcSumRange+'_'+todayStr()+'.png');
+}
+function dcShot(html,filename){
   const wrap=document.createElement('div');
   wrap.style.cssText='position:fixed;left:-99999px;top:0;width:420px;background:#fff;z-index:-1';
   wrap.innerHTML=html;
@@ -7278,93 +7699,31 @@ function exportDcSum(){
     html2canvas(wrap,{scale:2,backgroundColor:'#fff'}).then(canvas=>{
       wrap.remove();
       canvas.toBlob(blob=>{
-        if(!blob){ toast('\u5bfc\u51fa\u5931\u8d25\uff1a\u65e0\u6cd5\u751f\u6210\u56fe\u7247'); return; }
-        downloadBlob(blob,'\u6258\u73ed\u6c47\u603b_'+dcSumRange+'_'+todayStr()+'.png');
-        toast('\u2705 \u56fe\u7247\u5df2\u4fdd\u5b58');
+        if(!blob){ toast('导出失败：无法生成图片'); return; }
+        downloadBlob(blob,filename);
+        toast('✅ 图片已保存');
       },'image/png');
-    }).catch(e=>{ wrap.remove(); toast('\u5bfc\u51fa\u5931\u8d25\uff1a'+e.message); });
+    }).catch(e=>{ wrap.remove(); toast('导出失败：'+e.message); });
   });
 }
-function toggleDcMore(btn){
-  const box=$('#dc-hw-more'); if(!box) return;
-  const show=box.style.display==='none';
-  box.style.display=show?'':'none';
-  btn.textContent=show?'\u25be \u6536\u8d77\u989d\u5916\u79d1\u76ee':'...';
-  if(!show) btn.textContent='\u25b8 \u5c55\u5f00\u66f4\u591a\u79d1\u76ee\uff08'+box.children.length+'\uff09';
+function svSubjectFor(sid){
+  const freq={};
+  Object.values(DB.data.supervisions||{}).filter(r=>!r._deleted&&r.studentId===sid).forEach(r=>{ const k=r.subject||''; if(k) freq[k]=(freq[k]||0)+1; });
+  const top=Object.entries(freq).sort((a,b)=>b[1]-a[1])[0];
+  if(top) return top[0];
+  const g={};
+  Object.values(DB.data.supervisions||{}).filter(r=>!r._deleted).forEach(r=>{ const k=r.subject||''; if(k) g[k]=(g[k]||0)+1; });
+  const gt=Object.entries(g).sort((a,b)=>b[1]-a[1])[0];
+  return gt?gt[0]:'';
 }
-
-/* ---- 作业智能识别 ---- */
-const DC_SUBJECT_HINTS={
- '\u8bed\u6587':['\u6284\u5199','\u751f\u5b57','\u542c\u5199','\u53e4\u8bd7','\u80cc\u8bf5','\u8bfe\u6587','\u62fc\u97f3','\u9020\u53e5','\u65e5\u8bb0','\u4f5c\u6587','\u9605\u8bfb','\u5b57\u5e16','\u7ec4\u8bcd','\u7b14\u753b','\u7b14\u987a'],
- '\u6570\u5b66':['\u53e3\u7b97','\u7ad6\u5f0f','\u5e94\u7528\u9898','\u8ba1\u7b97\u9898','\u7ec3\u4e60\u518c','\u5965\u6570','\u901f\u7b97','\u4e58\u6cd5','\u9664\u6cd5'],
- '\u82f1\u8bed':['\u5355\u8bcd','\u9ed8\u5199','\u80cc\u5355\u8bcd','\u5b57\u6bcd','\u97f3\u6807','\u8ddf\u8bfb','\u7ed8\u672c','\u53e5\u578b']
-};
-function dcInferSubject(t){
-  const t2=t.replace(/^[\s\uff1a:.,\u3001]+/,'');
-  const subs=dcAllSubjects();
-  for(const s of subs){ if(t2.indexOf(s)===0) return {subj:s,task:t2.slice(s.length).replace(/^[\s\uff1a:.,\u3001]+/,'')}; }
-  for(const s of subs){ const i=t2.indexOf(s); if(i>=0&&i<=6) return {subj:s,task:(t2.slice(0,i)+t2.slice(i+s.length)).replace(/^[\s\uff1a:.,\u3001]+/,'')}; }
-  for(const k in DC_SUBJECT_HINTS){
-    if(DC_SUBJECT_HINTS[k].some(kw=>t2.indexOf(kw)>=0)) return {subj:k,task:t2};
-  }
-  return null;
-}
-function dcEnsureHwRow(subj,task){
-  let rows=[...document.querySelectorAll('#dc-hw-list .dc-hw-row')];
-  let row=rows.find(x=>x.dataset.subject===subj);
-  if(!row){
-    const more=$('#dc-hw-more');
-    if(more){ row=[...more.querySelectorAll('.dc-hw-row')].find(x=>x.dataset.subject===subj); if(row) more.style.display=''; }
-  }
-  if(!row){
-    $('#dc-hw-list').insertAdjacentHTML('beforeend',dcHwRow(subj,{st:'none',task:task||''}));
-    rows=[...document.querySelectorAll('#dc-hw-list .dc-hw-row')];
-    row=rows[rows.length-1];
-  }
-  row.dataset.status='none';
-  row.querySelectorAll('.dc-hw-btn').forEach(b=>{
-    const x=DC_STATUS.find(s2=>s2.k===b.dataset.st);
-    if(x.k==='none'){ b.style.borderColor=x.c; b.style.color=x.c; b.style.background=x.bg; }
-    else { b.style.borderColor=''; b.style.color=''; b.style.background=''; }
-  });
-  const inp=row.querySelector('.dc-hw-task');
-  if(inp){ inp.style.display=''; if(task) inp.value=inp.value?inp.value+'\uff1b'+task:task; }
-  return row;
-}
-function parseDcHwText(){
-  const box=$('#dc-parse-in'); if(!box) return;
-  const raw=box.value.trim();
-  if(!raw){ toast('请先输入作业内容'); return; }
-  const frags=raw.split(/[\n\r;\uff1b,\uff0c\u3002\u3001!\uff01?\uff09\t]+/).map(x=>x.trim()).filter(Boolean);
-  if(!frags.length){ toast('没有可识别的内容'); return; }
-  let applied=0, lastSubj=''; const unknown=[];
-  frags.forEach(f=>{
-    const m=dcInferSubject(f);
-    if(m){ dcEnsureHwRow(m.subj,m.task); lastSubj=m.subj; applied++; }
-    else if(lastSubj){
-      const row=[...document.querySelectorAll('#dc-hw-list .dc-hw-row')].find(x=>x.dataset.subject===lastSubj);
-      if(row){ const inp=row.querySelector('.dc-hw-task'); if(inp) inp.value=inp.value?inp.value+'\uff1b'+f:f; applied++; }
-    } else unknown.push(f);
-  });
-  if(applied){ box.value=''; toast('\u2713 已识别登记 '+applied+' 项'+(unknown.length?'，'+unknown.length+' 项无法识别，请手动补':'')); }
-  else toast('无法识别科目，请在每项前写科目名，如\u201c语文:抄写生字\u201d');
-}
-/* ---- 到访次数包 ---- */
-function dcUsedQuota(sid){ return allDaycareRecords().filter(r=>r.studentId===sid).length; }
-function dcQuotaLeft(s){ const q=(s&&s.dcQuota)||0; if(!q) return null; return q-dcUsedQuota(s.id); }
-function dcVisitBadge(s){
-  const left=dcQuotaLeft(s); if(left===null) return '';
-  const c=left<=0?'#dc2626':(left<=3?'#d97706':'#16a34a');
-  const bg=left<=0?'#fee2e2':(left<=3?'#fef3c7':'#dcfce7');
-  return '<span style="background:'+bg+';color:'+c+';border-radius:8px;padding:1px 6px;font-size:10px;font-weight:600">🎟 \u5269'+left+'\u6b21</span>';
-}
-function setDcQuota(sid){
-  const stu=DB.data.students[sid]; if(!stu) return;
-  const v=prompt('\u8bbe\u5b9a\u300c'+stu.name+'\u300d\u7684\u6258\u73ed\u603b\u6b21\u6570\u5305\uff08\u7559\u7a7a/0 \u4e3a\u4e0d\u9650\uff09\uff1a', stu.dcQuota||'');
-  if(v===null) return;
-  const q=parseInt(v,10)||0;
-  stu.dcQuota=q; stu.updatedAt=now(); DB.save(); renderDaycare();
-  toast(q?('\u2713 \u5df2\u8bbe\u5b9a '+stu.name+' \u6b21\u6570\u5305 '+q+' \u6b21\uff08\u5df2\u7528 '+dcUsedQuota(sid)+' \u6b21\uff09'):'\u5df2\u53d6\u6d88\u6b21\u6570\u9650\u5236');
+function dcLinkSv(sid,date,time){
+  const subj=svSubjectFor(sid);
+  if(!subj) return false;
+  const dup=Object.values(DB.data.supervisions||{}).some(r=>!r._deleted&&r.studentId===sid&&r.date===date&&r.subject===subj);
+  if(dup) return false;
+  const t=now(); const id=uid();
+  DB.data.supervisions[id]={id:id,studentId:sid,subject:subj,date:date,time:time||'',note:'托班到班联动',vocab:0,spell:0,listening:false,speaking:false,createdAt:t,updatedAt:t};
+  return true;
 }
 
 function renderRecords(){
@@ -8862,7 +9221,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v52';
+    const sw=`const C='tw-cache-v53';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
