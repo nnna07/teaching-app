@@ -578,8 +578,8 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.38.0';
-const APP_VERSION_DATE = '2026-09-01';
+const APP_VERSION = 'v3.38.1';
+const APP_VERSION_DATE = '2026-10-31';
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -7094,6 +7094,7 @@ function dcEntryCommit(next){
   const st=DB.data.students[sid];
   if(st&&st.dcQuota>0&&!findDaycareRecord(sid,date)&&dcUsedQuota(sid)>=st.dcQuota&&!confirm('「'+st.name+'」的次数包已用完（'+st.dcQuota+'次）。仍要记录？')) return;
   dcBusy=true;
+  try{
   const r=dcEnsureRecord(sid,date,'');
   let added=0;
   items.forEach(it=>{
@@ -7104,7 +7105,7 @@ function dcEntryCommit(next){
   (dcEntry.draft.photos||[]).forEach(p=>{ if(!r.photos) r.photos=[]; r.photos.push({data:p.data,name:p.name,ts:p.ts||now()}); });
   r.updatedAt=now(); DB.save();
   const T=dcTable('dcDraft'); delete T[dcDraftKey(sid,date)]; DB.save();
-  dcBusy=false; dcStorageWarn();
+  dcStorageWarn();
   if(next){
     const nid=dcNextUnfinished(sid);
     const d=dcDraftGet(nid,date);
@@ -7114,8 +7115,10 @@ function dcEntryCommit(next){
     renderDaycare();
   } else {
     closeModal(); dcOpenId=sid; renderDaycare();
-    toast('✓ 已保存 '+added+' 项到'+st.name+'的今日作业');
+    toast('✓ 已保存 '+added+' 项到'+(st?st.name:'该生')+'的今日作业');
   }
+  }catch(e){ toast('⚠️ 作业未保存：'+(e&&e.message?e.message:'未知错误')); }
+  finally{ dcBusy=false; }
 }
 function dcEntryMulti(){
   const items=dcEntry.draft.items; if(!items.length){ toast('清单为空'); return; }
@@ -7147,6 +7150,7 @@ function dcDoAssign(){
   const btnTxt='为已选 '+ids.length+' 名学生添加 '+items.length+' 项作业';
   if(!confirm('操作日期：'+dcEntry.date+'\n选中学生：'+ids.length+' 人\n作业内容：'+items.length+' 项\n\n'+btnTxt+'？\n（默认追加，不覆盖已有作业）')) return;
   dcBusy=true;
+  try{
   let added=0, skipped=0, dupNames=[];
   ids.forEach(sid=>{
     const r=dcEnsureRecord(sid,dcEntry.date,'');
@@ -7158,13 +7162,15 @@ function dcDoAssign(){
     });
     r.updatedAt=now();
   });
-  DB.save(); dcBusy=false;
+  DB.save();
   let msg='✓ 成功添加 '+added+' 项'+(skipped?('，跳过重复 '+skipped+' 项'):'');
   if(skipped){
     if(confirm(msg+'\n重复出现在：'+[...new Set(dupNames)].join('、')+'\n\n点「确定」结束，点「取消」返回修改清单。')){ closeModal(); renderDaycare(); toast(msg); }
     return;
   }
   closeModal(); renderDaycare(); toast(msg);
+  }catch(e){ toast('⚠️ 未添加成功：'+(e&&e.message?e.message:'未知错误')); }
+  finally{ dcBusy=false; }
 }
 function dcCopyFrom(){
   const stus=Object.values(DB.data.students||{}).filter(s=>!s._deleted);
@@ -7226,46 +7232,119 @@ function dcUseTemplate(k){
 }
 
 /* ==================== 到离班 ==================== */
-function openDcQuick(){
-  const kw='';
-  let h='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">已到班的学生不会重复记录；到班即加入今日名单。</div>';
-  h+='<input id="dc-qsearch" class="form-control" style="font-size:12px;margin-bottom:6px" placeholder="🔍 搜索姓名" oninput="dcQuickFilter(this.value)">';
-  const stus=Object.values(DB.data.students||{}).filter(s=>!s._deleted).sort((a,b)=>a.name.localeCompare(b.name,'zh'));
+let dcQGroups=[];
+function dcQuickState(){ if(!window._dcQ) window._dcQ={}; return window._dcQ; }
+function dcQuickGroups(){
+  const stus=Object.values(DB.data.students||{}).filter(x=>!x._deleted);
   const recs=getDaycareRecords(dcDate); const rm={}; recs.forEach(r=>rm[r.studentId]=r);
-  h+='<div class="pick-list">'+stus.map(s=>{
-    const r=rm[s.id];
-    return '<label class="pick-item" data-name="'+dcEsc(s.name)+'"><input type="checkbox" class="dc-qsel" value="'+s.id+'"'+(r?' checked disabled':'')+'><span class="nm">'+dcEsc(s.name)+(s.grade?'（'+dcEsc(s.grade)+'）':'')+(r?' <span style="color:#16a34a;font-size:10px">已到班</span>':'')+'</span></label>';
-  }).join('')+'</div>';
+  const map={};
+  stus.forEach(st=>{ const g=(st.grade||'').trim()||'未填年级'; if(!map[g]) map[g]=[]; map[g].push(st); });
+  const GV=GRADES.map(x=>x.v);
+  const gi=g=>(GV.indexOf(g)>=0?GV.indexOf(g):99);
+  const order=Object.keys(map).sort((a,b)=>{ const d=gi(a)-gi(b); if(d) return d; return a.localeCompare(b,'zh'); });
+  order.forEach(g=>map[g].sort((a,b)=>a.name.localeCompare(b.name,'zh')));
+  return {order:order,map:map,rm:rm};
+}
+function openDcQuick(){
+  const G=dcQuickGroups(); const st=dcQuickState();
+  dcQGroups=G.order;
+  let h='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">勾选今天到班的学生即可，点年级标题可折叠。已到班的会标绿，重复勾选不会改掉原时间。</div>';
+  h+='<div style="display:flex;gap:5px;margin-bottom:7px">'
+    +'<input id="dc-qsearch" class="form-control" style="flex:1;font-size:12px" placeholder="🔍 搜索姓名" oninput="dcQuickFilter(this.value)">'
+    +'<button class="btn btn-sm btn-ghost" style="font-size:11px;padding:5px 9px;white-space:nowrap" onclick="dcQuickAll(true)">全选</button>'
+    +'<button class="btn btn-sm btn-ghost" style="font-size:11px;padding:5px 9px;white-space:nowrap" onclick="dcQuickAll(false)">清空</button></div>';
+  G.order.forEach((g,idx)=>{
+    const arr=G.map[g]; if(!arr.length) return;
+    const done=arr.filter(st=>G.rm[st.id]).length;
+    const open=(st[g]===undefined)?true:st[g];
+    h+='<div class="dc-qgroup" style="border:1px solid var(--border);border-radius:9px;margin-bottom:6px;overflow:hidden">';
+    h+='<div onclick="dcQuickToggle('+idx+')" style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--card);cursor:pointer">'
+      +'<span id="dc-qa-'+idx+'" style="font-size:12px;color:var(--text3)">'+(open?'▾':'▸')+'</span>'
+      +'<span style="font-size:13px;font-weight:600">'+dcEsc(g)+'</span>'
+      +'<span style="font-size:11px;color:var(--text3)">'+arr.length+'人'+(done?' · 已到班 '+done:'')+'</span>'
+      +'<span onclick="event.stopPropagation();dcQuickGroupAll('+idx+',true)" style="margin-left:auto;font-size:11px;color:var(--primary);padding:2px 6px">全选</span>'
+      +'</div>';
+    h+='<div id="dc-qg-'+idx+'" class="dc-qbody" style="display:'+(open?'':'none')+'">';
+    arr.forEach(st=>{
+      const r=G.rm[st.id];
+      h+='<label class="pick-item" data-name="'+dcEsc(st.name)+'" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-top:1px solid var(--border)">'
+        +'<input type="checkbox" class="dc-qsel" value="'+st.id+'" style="width:auto;flex-shrink:0" onchange="dcQuickSyncCount()">'
+        +'<span style="flex:1;font-size:13px">'+dcEsc(st.name)
+        +(r?' <span style="color:#16a34a;font-size:10px">✓ 已到班 '+(r.arrive||'')+'</span>':'')
+        +'</span></label>';
+    });
+    h+='</div></div>';
+  });
+  if(!G.order.length) h+='<div style="text-align:center;color:var(--text3);font-size:12px;padding:14px 0">还没有学生，请先到「学生」里添加</div>';
   h+='<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);margin-top:8px"><input type="checkbox" id="dc-qsv" checked style="width:auto">📍 同时记录督学来访</label>';
-  const footer='<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn btn-primary" style="flex:2" onclick="saveDcQuick()">✓ 记录到班</button>';
+  const footer='<span id="dc-qcount" style="flex:0 0 auto;align-self:center;font-size:11px;color:var(--text3)"></span>'
+    +'<button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button>'
+    +'<button class="btn btn-primary" style="flex:2" onclick="saveDcQuick()">✓ 记录到班</button>';
   openModal(h,footer); setSheetTitle('批量到班（'+(+dcDate.slice(5,7))+'月'+(+dcDate.slice(8))+'日）');
+}
+function dcQuickToggle(idx){
+  const g=dcQGroups[idx]; if(g===undefined) return;
+  const st=dcQuickState(); const open=!(st[g]===undefined?true:st[g]); st[g]=open;
+  const body=document.getElementById('dc-qg-'+idx), ar=document.getElementById('dc-qa-'+idx);
+  if(body) body.style.display=open?'':'none';
+  if(ar) ar.textContent=open?'▾':'▸';
 }
 function dcQuickFilter(v){
   const kw=(v||'').trim().toLowerCase();
-  [...document.querySelectorAll('.pick-item')].forEach(el=>{
-    const nm=(el.dataset.name||'').toLowerCase();
-    el.style.display=(!kw||nm.indexOf(kw)>=0)?'':'none';
+  [...document.querySelectorAll('.dc-qgroup')].forEach(gEl=>{
+    let n=0;
+    [...gEl.querySelectorAll('.pick-item')].forEach(el=>{
+      const nm=(el.dataset.name||'').toLowerCase();
+      const ok=(!kw||nm.indexOf(kw)>=0);
+      el.style.display=ok?'':'none'; if(ok) n++;
+    });
+    gEl.style.display=n?'':'none';
+    if(kw&&n){ const bd=gEl.querySelector('.dc-qbody'); if(bd) bd.style.display=''; }
   });
+}
+function dcQuickGroupAll(idx,on){
+  const box=document.getElementById('dc-qg-'+idx); if(!box) return;
+  [...box.querySelectorAll('.dc-qsel')].forEach(cb=>{ const row=cb.closest('.pick-item'); if(row&&row.style.display==='none') return; cb.checked=on; });
+  dcQuickSyncCount();
+}
+function dcQuickAll(on){
+  if(on) [...document.querySelectorAll('.dc-qbody')].forEach(b=>{ b.style.display=''; });
+  [...document.querySelectorAll('.dc-qsel')].forEach(cb=>{ const row=cb.closest('.pick-item'); if(row&&row.style.display==='none') return; cb.checked=on; });
+  dcQuickSyncCount();
+}
+function dcQuickSyncCount(){
+  const n=[...document.querySelectorAll('.dc-qsel:checked')].length;
+  const el=document.getElementById('dc-qcount'); if(el) el.textContent=n?('已选 '+n+' 人'):'';
 }
 function saveDcQuick(){
   if(dcBusy) return;
   const time=new Date().toTimeString().slice(0,5);
-  const ids=[...document.querySelectorAll('.dc-qsel:checked')].filter(cb=>!cb.disabled).map(cb=>cb.value);
-  if(!ids.length){ toast('请选择尚未到班的学生'); return; }
-  const linkSv=$('#dcq-sv')?$('#dcq-sv').checked:($('#dc-qsv')?$('#dc-qsv').checked:true);
-  const over=ids.filter(sid=>{ const st=DB.data.students[sid]; return st&&st.dcQuota>0&&dcUsedQuota(sid)>=st.dcQuota; }).map(sid=>DB.data.students[sid].name);
+  const ids=[...document.querySelectorAll('.dc-qsel:checked')].map(cb=>cb.value);
+  if(!ids.length){ toast('请先勾选今天到班的学生'); return; }
+  const fresh=ids.filter(sid=>!findDaycareRecord(sid,dcDate));
+  if(!fresh.length){ toast('勾选的学生今天都已记录到班'); return; }
+  const linkSv=$('#dc-qsv')?!!$('#dc-qsv').checked:true;
+  const over=fresh.filter(sid=>{ const st=DB.data.students[sid]; return st&&st.dcQuota>0&&dcUsedQuota(sid)>=st.dcQuota; }).map(sid=>DB.data.students[sid].name);
   if(over.length&&!confirm('以下学生次数包已用完：'+over.join('、')+'。仍要记录到班？')) return;
   dcBusy=true;
-  let n=0, sv=0;
-  ids.forEach(sid=>{
-    if(findDaycareRecord(sid,dcDate)) return;
-    const r=dcEnsureRecord(sid,dcDate,time);
-    if(!r.arrive) r.arrive=time;
-    r.updatedAt=now(); n++;
-    if(linkSv && dcLinkSv(sid,dcDate,time)) sv++;
-  });
-  DB.save(); dcBusy=false; closeModal(); renderDaycare();
-  toast('✓ 已记录 '+n+' 名学生到班（'+time+'）'+(sv?'，同步督学来访 '+sv+' 条':''));
+  try{
+    let n=0,sv=0;
+    fresh.forEach(sid=>{
+      const r=dcEnsureRecord(sid,dcDate,time);
+      if(!r.arrive) r.arrive=time;
+      r.updatedAt=now(); n++;
+      if(linkSv && dcLinkSv(sid,dcDate,time)) sv++;
+    });
+    dcRosterAdd(dcDate,fresh);
+    DB.save();
+    const skip=ids.length-fresh.length;
+    toast('✓ 已记录 '+n+' 名学生到班（'+time+'）'+(skip?'，'+skip+' 人今天已到班、已跳过':'')+(sv?'，同步督学来访 '+sv+' 条':''));
+    closeModal(); renderDaycare();
+  }catch(e){
+    toast('⚠️ 到班记录未完成：'+(e&&e.message?e.message:'未知错误'));
+  }finally{
+    dcBusy=false;
+  }
 }
 function batchDcLeave(){
   if(dcBusy) return;
@@ -7283,8 +7362,11 @@ function batchDcLeave(){
   }
   if(!confirm('为 '+recs.length+' 名学生记录离班时间 '+time+' ？')) return;
   dcBusy=true;
+  try{
   recs.forEach(r=>{ r.leave=time; if(reason) r.leaveNote=reason; r.updatedAt=now(); });
-  DB.save(); dcBusy=false; renderDaycare(); toast('✓ 已记录 '+recs.length+' 人离班（'+time+'）');
+  DB.save(); renderDaycare(); toast('✓ 已记录 '+recs.length+' 人离班（'+time+'）');
+  }catch(e){ toast('⚠️ 离班记录未完成：'+(e&&e.message?e.message:'未知错误')); }
+  finally{ dcBusy=false; }
 }
 function openDcTimeEdit(rid){
   const r=DB.data.daycare[rid]; if(!r) return;
@@ -9221,7 +9303,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v53';
+    const sw=`const C='tw-cache-v54';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
