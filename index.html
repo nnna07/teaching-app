@@ -578,7 +578,7 @@ select.form-control{appearance:none;background-image:url("data:image/svg+xml,%3C
    教学管理工作台 v3.6 - 课程管理版
    ==================================================================== */
 
-const APP_VERSION = 'v3.38.1';
+const APP_VERSION = 'v3.38.2';
 const APP_VERSION_DATE = '2026-10-31';
 
 const $ = s => document.querySelector(s);
@@ -1090,6 +1090,29 @@ function setSyncInd(on){
 setInterval(()=>{ if(DB.config && isCosConfigured() && DB.config.autoSync && !syncing) doCloudSync(false); }, 30000);
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden && DB.config && isCosConfigured()) doCloudSync(false); });
 setTimeout(maybeAutoBackup, 12000); // 每天首次打开12秒后自动备份
+checkLocalHint();
+
+/* ==================== 本地打开提示（数据与网页版不互通） ==================== */
+function isLocalOrigin(){
+  try{ const p=location.protocol, h=location.hostname||'';
+    return p==='file:' || h==='127.0.0.1' || h==='localhost' || h==='[::1]' || h===''; }catch(e){ return false; }
+}
+function checkLocalHint(){
+  if(!isLocalOrigin()) return;
+  try{ if(localStorage.getItem('teach_localhint')==='off') return; }catch(e){}
+  const d=document.createElement('div');
+  d.id='local-hint';
+  d.style.cssText='position:fixed;left:8px;right:8px;bottom:70px;z-index:300;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:10px;padding:9px 11px;font-size:11px;line-height:1.6;box-shadow:0 2px 8px rgba(0,0,0,.08)';
+  d.innerHTML='<b>⚠️ 当前打开的是本地文件，数据与网页版不互通</b><br>'
+    +'要看回原来的数据，请打开 https://nnna07.github.io/teaching-app/<br>'
+    +'要把数据搬到这里：我的 → 数据同步 → 「💾 导出文件」，再在这里「📂 从文件导入」。'
+    +'<div style="display:flex;gap:6px;margin-top:6px"><button class="btn btn-sm btn-ghost" style="font-size:11px;padding:3px 8px" onclick="closeLocalHint()">知道了</button></div>';
+  document.body.appendChild(d);
+}
+function closeLocalHint(){
+  const el=document.getElementById('local-hint'); if(el) el.remove();
+  try{ localStorage.setItem('teach_localhint','off'); }catch(e){}
+}
 
 /* ==================== 跨标签页自动同步 (零配置) ==================== */
 let syncBC = null;
@@ -9303,7 +9326,7 @@ function setupPWA(){
   $('#manifest').setAttribute('href','data:application/json,'+encodeURIComponent(JSON.stringify(manifest)));
   if('serviceWorker' in navigator){
     // Service Worker: 离线优先（stale-while-revalidate），保证应用下载一次后能离线使用
-    const sw=`const C='tw-cache-v54';
+    const sw=`const C='tw-cache-v55';
 const PRECACHE_URLS=['./','./index.html'];
 self.addEventListener('install',e=>{
   self.skipWaiting();
